@@ -1,0 +1,158 @@
+# ---------------------------------------------------------------------------
+# ePIC Barrel Time-of-Flight (BTOF) — Stave / Half-Stave / Stavelet
+# design template hierarchy, for `hdb load-template`.
+#
+# BTOF is the AC-LGAD-based barrel time-of-flight subsystem of the ePIC
+# detector at the EIC, sitting at r = 63-66 cm from the beam pipe
+# (-1.42 < eta < 1.77), providing ~35 ps timing resolution for low-momentum
+# pi/K/p separation. Its "modularized stave" design (baselined by the
+# BTOF group as of the June 2025 EIC Detector Advisory Committee review)
+# builds the barrel from staves, each made of half-staves, each made of
+# smaller pluggable modules called "stavelets" -- the stavelet is
+# explicitly the unit that gets assembled, thermally tested, and QA'd as
+# a standalone item before integration, which is exactly the kind of
+# thing this database is for tracking individually.
+#
+# Numbers below (module/half-stave dimensions, per-half-stave sensor
+# count, timing resolution, tilt angle, sensor channel count, total
+# half-stave count) are taken from public ePIC BTOF status talks:
+#   - "Barrel TOF technical status", S. Mazza (UC Santa Cruz),
+#     10th EIC Detector Advisory Committee review, 31 May 2025
+#     https://indico.bnl.gov/event/26584/contributions/105092/
+#   - "ePIC Barrel TOF Mechanical Structure", Yi Yang (Academia Sinica),
+#     TIDC Annual Meeting, 22 Nov 2024
+#     https://indico.phys.sinica.edu.tw/event/132/contributions/965/
+# The one number NOT stated directly in either source is the split of the
+# 288 total half-staves into individual staves -- the sources describe the
+# barrel as "two symmetric stave sections" without giving a per-stave
+# half-stave count, so this file assumes 144 half-staves/stave
+# (288 / 2 = 144) as a reasonable, clearly-flagged estimate for the "BTOF
+# Stave" template's quantity below. Everything else is sourced directly.
+#
+# Component/technical-system naming convention for this flat-template
+# approach (see client/README.md, "Design templates" section): each
+# assembly level is BOTH a catalog Component AND a DesignTemplate of the
+# identical name, so `hdb bom-template "BTOF Stave"` can recurse through
+# all three levels down to the AC-LGAD Sensor / FCFDv2 Readout components
+# already in the seed catalog.
+# ---------------------------------------------------------------------------
+
+templates:
+
+  # -- Level 3 (leaf assembly): one stavelet module --------------------------
+  - template:
+      name: "BTOF Stavelet"
+      project: "ePIC"
+      owner_group: BTOF
+      description: >
+        Pluggable BTOF module, 162 mm long, double-sided (front/back).
+        Carries 4 AC-LGAD strip sensors total, each read out 1:1 by a
+        128-channel FCFDv2 ASIC via an interposer board, aggregated onto
+        one flex cable (FPC) at the module edge. Assembled and
+        thermally/electrically qualified as a standalone unit before
+        being mounted onto a half-stave (baseline "modularized stave"
+        design, BTOF DAC review 5/31/2025).
+    elements:
+      - element_name: "AC-LGAD Sensors"
+        quantity: 4
+        description: >
+          Strip AC-LGAD, nominal 3.2x2.2 cm, 1 cm strip length, 500 um
+          pitch, 128 ch/sensor, ~35 ps timing / ~30 um spatial resolution.
+          Existing catalog component -- not recreated.
+        component: "AC-LGAD Sensor"
+
+      - element_name: "FCFD Readout ASICs"
+        quantity: 4
+        description: >
+          128-channel Fermilab Constant-Fraction-Discriminator ASIC, one
+          per sensor (1:1 channel match). Existing catalog component.
+        component: "FCFDv2 Readout"
+
+      - element_name: "Interposer Boards"
+        quantity: 4
+        description: "Sensor-to-ASIC interposer, one per sensor/ASIC pair."
+        component:
+          name: "BTOF Interposer Board"
+          model_number: "BTOF-INT-01"
+          description: "Sensor-to-FCFD interposer board for one BTOF stavelet channel."
+          technical_system: "BTOF-Mechanical"
+          technical_system_group: BTOF
+
+      - element_name: "Flex Cable (FPC)"
+        quantity: 1
+        description: "Aggregates all 4 sensor/ASIC channels to the module edge connector."
+        component:
+          name: "BTOF Flex Cable (FPC)"
+          model_number: "BTOF-FPC-01"
+          description: "Flexible printed circuit, stavelet-to-half-stave signal/power interconnect."
+          technical_system: "BTOF-Mechanical"
+
+  # -- Level 2: one half-stave, built from 8 stavelets ------------------------
+  - template:
+      name: "BTOF Half-Stave"
+      project: "ePIC"
+      owner_group: BTOF
+      description: >
+        Half-stave support structure, 1316 mm total length (1296 mm active
+        + 20 mm end/service region) = 8 x 162 mm stavelet modules mounted
+        on a carbon-honeycomb support with active pipe cooling. 288 of
+        these are the fundamental counted unit of the whole BTOF detector
+        (32 AC-LGAD sensors/half-stave = 8 stavelets x 4 sensors).
+    elements:
+      - element_name: "Stavelet Modules"
+        quantity: 8
+        description: "8 x 162 mm = 1296 mm of active length per half-stave."
+        component:
+          name: "BTOF Stavelet"
+          model_number: "BTOF-STAVELET-R1"
+          description: "162 mm double-sided AC-LGAD stavelet module (see BTOF Stavelet template)."
+          technical_system: "BTOF-Mechanical"
+
+      - element_name: "Peripheral Board"
+        quantity: 1
+        description: "Power/data aggregation board at the half-stave edge."
+        component:
+          name: "BTOF Peripheral Board"
+          model_number: "BTOF-PERIPH-01"
+          description: "Half-stave edge peripheral board -- power distribution and data concentration."
+          technical_system: "BTOF-Mechanical"
+
+      - element_name: "Cooling Pipe Segment"
+        quantity: 1
+        description: "Active pipe cooling embedded in the carbon-honeycomb support."
+        component:
+          name: "BTOF Cooling Pipe Segment"
+          model_number: "BTOF-COOL-01"
+          description: "Half-stave-length active cooling pipe, carbon-honeycomb embedded."
+          technical_system: "BTOF-Mechanical"
+
+  # -- Level 1 (top): one stave, built from half-staves -----------------------
+  - template:
+      name: "BTOF Stave"
+      project: "ePIC"
+      owner_group: BTOF
+      description: >
+        Full BTOF stave: a carbon-honeycomb backbone carrying half-staves
+        tilted at 18 degrees (design baseline) in the "pinwheel" barrel
+        structure. BTOF has 288 half-staves total across two symmetric
+        stave sections; this template assumes 144 half-staves/stave
+        (288 / 2) -- see the file header note, this split isn't stated
+        explicitly in the source material and is this file's own estimate.
+    elements:
+      - element_name: "Half-Stave Assemblies"
+        quantity: 144
+        description: "Estimated count -- see file header note on the 288-total / 2-stave-sections split."
+        component:
+          name: "BTOF Half-Stave"
+          model_number: "BTOF-HALFSTAVE-R1"
+          description: "1316 mm BTOF half-stave, 8 stavelets (see BTOF Half-Stave template)."
+          technical_system: "BTOF-Mechanical"
+
+      - element_name: "Carbon Honeycomb Support"
+        quantity: 1
+        description: "Stave-length carbon honeycomb backbone, 18-degree tilt mounting."
+        component:
+          name: "BTOF Carbon Honeycomb Support"
+          model_number: "BTOF-SUPPORT-01"
+          description: "Stave backbone structure, carbon honeycomb, active-cooling manifold interface."
+          technical_system: "BTOF-Mechanical"

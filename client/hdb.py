@@ -20,6 +20,8 @@ Commands
   bom            <DESIGN_NAME>  Bill of Materials (YAML)
   find           <TYPE> <PAT>   List items matching a wildcard pattern
   create-instance               Create a new ComponentInstance
+  load-template  <FILE>         Load DesignTemplate(s) from a YAML file
+  bom-template   <NAME>         Recursive parts explosion for a template
 
 Options
 -------
@@ -209,6 +211,74 @@ def cmd_bom(client, args):
                 ref = row.get("ref") or ""
                 qty = row.get("qty", 1)
                 print(f"{prefix}{tag} {row['element']}  x{qty}  -> {ref}")
+                _print(row.get("children", []), indent + 1)
+        _print(data)
+
+
+def _data_path(args, filename: str) -> str:
+    """Resolve a filename against the project's data/ folder if it isn't
+    already a valid path as given (relative to cwd or absolute)."""
+    if os.path.exists(filename):
+        return filename
+    root = args.root or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    candidate = os.path.join(root, "data", filename)
+    return candidate if os.path.exists(candidate) else filename
+
+
+def cmd_load_template(client, args):
+    """Load one or more DesignTemplates from a YAML file.
+
+    Looks for FILE as given first (relative to cwd, or absolute); if that
+    doesn't exist, falls back to <project root>/data/FILE.
+
+    Idempotent -- safe to re-run. Existing templates, elements, and
+    components are never modified or duplicated; only what's missing gets
+    created. See client/README.md for the YAML format and the flat
+    multi-level-template naming convention.
+
+    Examples
+    --------
+      bin/hdb load-template btof_stave_templates.yaml
+      bin/hdb load-template data/btof_stave_templates.yaml
+      bin/hdb --user crafts load-template btof_stave_templates.yaml
+    """
+    path = _data_path(args, args.file)
+    try:
+        results = client.designs.load_templates_from_yaml(path)
+    except FileNotFoundError:
+        print(f"Error: file not found: {args.file!r} (looked in cwd and data/)", file=sys.stderr)
+        sys.exit(1)
+    except Exception as exc:
+        print(f"Error loading template(s): {exc}", file=sys.stderr)
+        sys.exit(1)
+
+    if args.yaml:
+        _yaml(results)
+        return
+
+    for r in results:
+        status = "created" if r["template_created"] else "already existed"
+        print(f"Template {r['template']!r}: {status}")
+        for el in r["elements"]:
+            el_status = "created" if el["element_created"] else "already existed"
+            comp_status = " (component created)" if el["component_created"] else ""
+            print(f"  - {el['element_name']}: {el['component']}{comp_status} [{el_status}]")
+
+
+def cmd_bom_template(client, args):
+    name = " ".join(args.name)
+    try:
+        data = client.designs.template_bom(name)
+    except Exception as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(1)
+    if args.yaml:
+        _yaml(data)
+    else:
+        def _print(rows, indent=0):
+            for row in rows:
+                prefix = "  " * indent
+                print(f"{prefix}{row['element']}  x{row['qty']}  -> {row['component']} ({row['model_number'] or '--'})")
                 _print(row.get("children", []), indent + 1)
         _print(data)
 
@@ -493,6 +563,15 @@ def build_parser():
     sp.add_argument("--description", metavar="TEXT",   default="",
                     help="Free-text description")
 
+    sp = sub.add_parser("load-template",
+                        help="Load DesignTemplate(s) from a YAML file (data/ by default)")
+    sp.add_argument("file", metavar="FILE",
+                    help="YAML file, resolved against cwd then <project root>/data/")
+
+    sp = sub.add_parser("bom-template",
+                        help="Recursive parts explosion for a DesignTemplate")
+    sp.add_argument("name", nargs="+", metavar="TEMPLATE_NAME")
+
     return p
 
 
@@ -511,6 +590,8 @@ COMMANDS = {
     "bom":           cmd_bom,
     "find":          cmd_find,
     "create-instance": cmd_create_instance,
+    "load-template": cmd_load_template,
+    "bom-template":  cmd_bom_template,
 }
 
 if __name__ == "__main__":

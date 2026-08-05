@@ -236,6 +236,119 @@ client.designs.summary("BEMC tower")
 #    group_writeable, created_on, modified_on, element_count, bom (full BOM tree)
 ```
 
+### Design Templates — loading from YAML
+
+`DesignTemplateElement.component` is a *required* FK to a real catalog
+`Component` — unlike `Design`/`DesignElement`, a `DesignTemplate` has no
+`child_template` field, so one template cannot directly reference another as
+a sub-assembly. To represent a multi-level hierarchy (e.g. a detector built
+from staves, made of half-staves, made of smaller modules) with the schema
+as it stands, model each intermediate assembly level as **both** its own
+catalog `Component` **and** its own `DesignTemplate` of the identical name.
+`template_bom()` follows that name match to recurse — the same way a real
+design's BOM follows `child_design` — so a multi-level template set behaves
+like nested templates without needing a schema change. This also means every
+intermediate assembly (a stavelet, a half-stave, ...) is independently
+serial-trackable as its own `ComponentInstance` once built, which a "pure
+template nesting" design wouldn't give you for free.
+
+```python
+client.designs.load_templates_from_yaml("data/btof_stave_templates.yaml")
+# -> list of per-template summary dicts:
+#    [{"template": "BTOF Stavelet", "template_created": True,
+#      "elements": [{"element_name": "AC-LGAD Sensors", "component": "AC-LGAD Sensor",
+#                    "component_created": False, "element_created": True}, ...]}, ...]
+
+client.designs.template_bom("BTOF Stave")
+# -> recursive parts explosion, same shape idea as designs.bom():
+#    [{"element": "Half-Stave Assemblies", "component": "BTOF Half-Stave",
+#      "model_number": "BTOF-HALFSTAVE-R1", "qty": 144, "description": "...",
+#      "children": [ ... recurses into the BTOF Half-Stave template ... ]}, ...]
+
+client.designs.all_templates()                 # queryset of DesignTemplate
+client.designs.get_template(name="BTOF Stave")
+client.designs.template_elements("BTOF Stave")  # DesignTemplateElement queryset
+client.designs.create_template(name=..., project="ePIC", description=..., elements=[...])
+```
+
+**Idempotent** — safe to re-run: existing templates, elements, and
+components are never modified or duplicated, only what's missing gets
+created (`get_or_create` throughout, matching `seed_hdb.py`'s convention).
+This is a curator/administrative operation, like `seed_hdb`, not a
+per-request scoped write — `owner_group_name`/`owner_username` (or the
+YAML's `owner_group`/`owner_user`) are recorded on the template if given, but
+there's no requirement that the acting user belong to that group (unlike
+`inventory.create()`).
+
+YAML file format (a single template document, or `templates: [...]` for
+several — loaded top to bottom, so for a multi-level hierarchy list leaf
+templates first, since a higher level's element needs the level below's
+Component to already exist or be creatable):
+
+```yaml
+templates:
+  - template:
+      name: "BTOF Stavelet"
+      project: "ePIC"           # default "ePIC"
+      owner_group: BTOF          # optional Group name
+      owner_user: crafts         # optional Django username
+      description: "..."
+    elements:
+      - element_name: "AC-LGAD Sensors"
+        quantity: 4               # default 1
+        description: "..."
+        component: "AC-LGAD Sensor"   # plain string = must already exist
+      - element_name: "Interposer Boards"
+        quantity: 4
+        component:                     # dict = get_or_create'd if missing
+          name: "BTOF Interposer Board"
+          model_number: "BTOF-INT-01"  # every component gets its own UUID id
+          description: "..."           # (Component.pk) plus this human part
+          technical_system: "BTOF-Mechanical"   # number -- both are how a
+          technical_system_group: BTOF          # physical instance traces
+                                                 # back to its catalog entry.
+```
+
+See `data/btof_stave_templates.yaml` for the full, real worked example: the
+ePIC Barrel Time-of-Flight (BTOF) detector's Stave → Half-Stave → Stavelet
+hierarchy, with dimensions, sensor/ASIC counts, and timing/spatial
+resolution sourced from public ePIC BTOF status talks (cited in the file's
+header comment).
+
+### `hdb.py` commands
+
+```
+$ python client/hdb.py --user crafts load-template btof_stave_templates.yaml
+Template 'BTOF Stavelet': created
+  - AC-LGAD Sensors: AC-LGAD Sensor [created]
+  - FCFD Readout ASICs: FCFDv2 Readout [created]
+  - Interposer Boards: BTOF Interposer Board (component created) [created]
+  - Flex Cable (FPC): BTOF Flex Cable (FPC) (component created) [created]
+Template 'BTOF Half-Stave': created
+  - Stavelet Modules: BTOF Stavelet (component created) [created]
+  ...
+Template 'BTOF Stave': created
+  - Half-Stave Assemblies: BTOF Half-Stave (component created) [created]
+  - Carbon Honeycomb Support: BTOF Carbon Honeycomb Support (component created) [created]
+
+$ python client/hdb.py bom-template "BTOF Stave"
+Carbon Honeycomb Support  x1  -> BTOF Carbon Honeycomb Support (BTOF-SUPPORT-01)
+Half-Stave Assemblies  x144  -> BTOF Half-Stave (BTOF-HALFSTAVE-R1)
+  Cooling Pipe Segment  x1  -> BTOF Cooling Pipe Segment (BTOF-COOL-01)
+  Peripheral Board  x1  -> BTOF Peripheral Board (BTOF-PERIPH-01)
+  Stavelet Modules  x8  -> BTOF Stavelet (BTOF-STAVELET-R1)
+    AC-LGAD Sensors  x4  -> AC-LGAD Sensor (AC-LGAD-v1)
+    FCFD Readout ASICs  x4  -> FCFDv2 Readout (FCFDv2)
+    Flex Cable (FPC)  x1  -> BTOF Flex Cable (FPC) (BTOF-FPC-01)
+    Interposer Boards  x4  -> BTOF Interposer Board (BTOF-INT-01)
+```
+
+`load-template FILE` resolves `FILE` against the current directory first,
+then falls back to `<project root>/data/FILE` — so both a bare filename and
+an explicit path work, run from anywhere. `--user` is optional here (unlike
+`create-instance`) since this is a curator operation, not a per-request
+write.
+
 ### Access control — `hdb_client/access.py`
 
 - **Read**: unrestricted for any authenticated (or unauthenticated/`user=None`)
