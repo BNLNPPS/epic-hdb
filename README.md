@@ -1,6 +1,6 @@
-# Component Database (CDB) — Django Implementation
+# Hardware Database (HDB) — Django Implementation
 
-A Django implementation of the Component Database described in *The Component
+A Django implementation of the Hardware Database described in *The Component
 Database User Guide* (Argonne National Laboratory / ePIC). The CDB is the
 central repository for documenting, organizing, and tracking components used
 in a particle physics accelerator or detector project.
