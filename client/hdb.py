@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-cdb — command-line interface to the Component Database.
+hdb — command-line interface to the Hardware Database.
 
 Run from the project root (next to manage.py):
 
-    bin/cdb <command> [args]
+    bin/hdb <command> [args]
 
-Add bin/ to PATH to invoke as just "cdb" from anywhere.
+Add bin/ to PATH to invoke as just "hdb" from anywhere.
 
 Commands
 --------
@@ -23,7 +23,7 @@ Commands
 
 Options
 -------
-  --settings  Django settings module  [default: cdb_project.settings]
+  --settings  Django settings module  [default: hdb_project.settings]
   --root      Project root directory  [default: parent of bin/]
   --yaml      Force YAML output for all commands
 """
@@ -49,8 +49,8 @@ def _setup(args):
     if not django.conf.settings.configured:
         django.setup()
 
-    from cdb_client import CDBClient
-    return CDBClient()
+    from hdb_client import HDBClient
+    return HDBClient()
 
 
 # ---------------------------------------------------------------------------
@@ -205,10 +205,10 @@ def cmd_find(client, args):
 
     Examples
     --------
-      bin/cdb find component "PbWO4*"
-      bin/cdb find design    "ePIC*"
-      bin/cdb find instance  "*strip*"
-      bin/cdb find system    "SVT*"
+      bin/hdb find component "PbWO4*"
+      bin/hdb find design    "ePIC*"
+      bin/hdb find instance  "*strip*"
+      bin/hdb find system    "SVT*"
     """
     import fnmatch
 
@@ -316,13 +316,13 @@ def cmd_create_instance(client, args):
 
     Individual flags
     ----------------
-      bin/cdb create-instance --by-name "ePIC SVT Strip Sensor" --tag SN-001
-      bin/cdb create-instance --by-pk   <UUID> --serial 20240101 --group SVT
+      bin/hdb create-instance --by-name "ePIC SVT Strip Sensor" --tag SN-001
+      bin/hdb create-instance --by-pk   <UUID> --serial 20240101 --group SVT
 
     YAML file input
     ---------------
-      bin/cdb create-instance --from-yaml instance.yaml
-      bin/cdb create-instance --from-yaml -          # read from stdin
+      bin/hdb create-instance --from-yaml instance.yaml
+      bin/hdb create-instance --from-yaml -          # read from stdin
 
     YAML file format::
 
@@ -406,13 +406,13 @@ def cmd_create_instance(client, args):
 
 def build_parser():
     p = argparse.ArgumentParser(
-        prog="cdb",
-        description="Command-line interface to the Component Database.",
+        prog="hdb",
+        description="Command-line interface to the Hardware Database.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    p.add_argument("--settings", default="cdb_project.settings",
+    p.add_argument("--settings", default="hdb_project.settings",
                    metavar="MODULE",
-                   help="Django settings module (default: cdb_project.settings)")
+                   help="Django settings module (default: hdb_project.settings)")
     p.add_argument("--root", default=None,
                    metavar="DIR",
                    help="Project root directory (default: parent of bin/)")

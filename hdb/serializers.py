@@ -1,5 +1,5 @@
 """
-DRF serializers for the Component Database (CDB).
+DRF serializers for the Hardware Database (HDB).
 """
 
 from rest_framework import serializers
@@ -201,30 +201,33 @@ class ComponentInstanceSerializer(serializers.ModelSerializer):
 # ── Domain 3: Designs ────────────────────────────────────────────────────────
 
 class DesignElementSerializer(serializers.ModelSerializer):
-    element_type         = serializers.SerializerMethodField()
-    component_name       = serializers.CharField(source="component.name",              read_only=True)
-    child_design_name    = serializers.CharField(source="child_design.name",           read_only=True)
-    installed_instances  = serializers.SerializerMethodField()
-    properties           = PropertyValueSerializer(many=True, read_only=True)
+    element_type            = serializers.SerializerMethodField()
+    component_name          = serializers.CharField(source="component.name",              read_only=True)
+    child_design_name       = serializers.CharField(source="child_design.name",           read_only=True)
+    # A quantity>1 element can hold several installed instances (one per
+    # slot, via DesignElementInstance) -- there's no single "the" installed
+    # instance any more, so this reports every instance id currently
+    # occupying one of this element's slots. (There used to be a single
+    # DesignElement.installed_instance FK; it was removed by migration 0004
+    # when multi-instance slots were introduced, but this serializer wasn't
+    # updated to match at the time -- it referenced a field that no longer
+    # existed and broke GET /api/designs/.)
+    installed_instance_ids = serializers.SerializerMethodField()
+    properties              = PropertyValueSerializer(many=True, read_only=True)
 
     class Meta:
         model  = DesignElement
         fields = ["id", "element_name", "element_type", "quantity", "description",
                   "component", "component_name",
                   "child_design", "child_design_name",
-                  "installed_instances",
+                  "installed_instance_ids",
                   "properties"]
 
     def get_element_type(self, obj):
         return obj.element_type()
 
-    def get_installed_instances(self, obj):
-        """IDs and tags of the inventory items installed into this element's
-        slots (up to `quantity` of them)."""
-        return [
-            {"id": dei.instance_id, "tag": dei.instance.tag}
-            for dei in obj.installed_instances.select_related("instance")
-        ]
+    def get_installed_instance_ids(self, obj):
+        return list(obj.installed_instances.values_list("instance_id", flat=True))
 
 
 class DesignListSerializer(serializers.ModelSerializer):

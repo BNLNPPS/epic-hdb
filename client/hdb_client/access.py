@@ -1,5 +1,5 @@
 """
-access.py — Permission and visibility scoping for the Component Database.
+access.py — Permission and visibility scoping for the Hardware Database.
 
 Every domain object that inherits OwnedModel (Component, ComponentInstance,
 Design) carries three fields relevant to access control:
@@ -8,13 +8,13 @@ Design) carries three fields relevant to access control:
     owner_group      FK -> auth.Group   (nullable — Django's built-in Group,
                                           confirmed via `from django.contrib
                                           .auth.models import User, Group`
-                                          in cdb/models.py)
+                                          in hdb/models.py)
     group_writeable  bool               (only meaningful together with owner_group)
 
 POLICY (explicit design decision — tighten if it doesn't match your needs):
 
   READ  : all authenticated users can read all catalog/inventory/design
-          rows. epiCDB is a shared collaboration database spanning many
+          rows. epiHDB is a shared collaboration database spanning many
           institutions, and the schema has no per-row read-privacy flag.
           If you need per-institution or per-group read isolation, add
           the filter in `visible_to()` below — the hook is already wired

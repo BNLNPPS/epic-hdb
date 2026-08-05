@@ -1,11 +1,11 @@
 """
-mcp_server.py — MCP server for the Component Database (CDB), user-facing.
+mcp_server.py — MCP server for the Hardware Database (HDB), user-facing.
 
 Authentication model
 ---------------------
 HTTP Basic Auth, validated against Django's own auth.User table via
 django.contrib.auth.authenticate(). There is no separate credential
-store: whatever accounts already exist in the CDB database (created via
+store: whatever accounts already exist in the HDB database (created via
 /admin/, `createsuperuser`, or your own signup flow) are exactly the
 accounts that can use this MCP server. Passwords are never handled by
 this file beyond passing them straight into Django's authenticate() —
@@ -14,8 +14,8 @@ never logged, stored, or echoed back.
 
 Every authenticated request is bound to a Django User for its duration,
 via a contextvar (see AuthContext below). Every tool builds a
-CDBClient(user=...) scoped to that user, so writes are permission-checked
-and the ownership hooks in cdb_client/access.py apply uniformly.
+HDBClient(user=...) scoped to that user, so writes are permission-checked
+and the ownership hooks in hdb_client/access.py apply uniformly.
 
 Transport
 ---------
@@ -23,8 +23,8 @@ This server only supports Streamable HTTP (not stdio). Basic Auth only
 makes sense when there's a request per call to attach credentials to;
 stdio is a single trusted local process with no per-call identity, so
 it is intentionally not wired up here. If you need a local/dev mode,
-use the existing CLI (`client/cdb.py`) directly instead, via
-CDBClient(user=None).
+use the existing CLI (`client/hdb.py`) directly instead, via
+HDBClient(user=None).
 
 NOTE ON LIBRARY VERSIONS
 -------------------------
@@ -40,10 +40,10 @@ Setup
 -----
     pip install "mcp[cli]" django starlette uvicorn asgiref
 
-    # from the epiCDB project root (next to manage.py):
-    DJANGO_SETTINGS_MODULE=cdb_project.settings \
-    CDB_PROJECT_ROOT=/path/to/epiCDB \
-    CDB_MCP_PUBLIC_HOST=your-tunnel-hostname.trycloudflare.com \
+    # from the epiHDB project root (next to manage.py):
+    DJANGO_SETTINGS_MODULE=hdb_project.settings \
+    HDB_PROJECT_ROOT=/path/to/epiHDB \
+    HDB_MCP_PUBLIC_HOST=your-tunnel-hostname.trycloudflare.com \
     python client/mcp_server.py
 """
 from __future__ import annotations
@@ -57,13 +57,13 @@ from contextvars import ContextVar
 from typing import Optional
 
 # ---------------------------------------------------------------------
-# 1. Django bootstrap — must happen before any Django or cdb_client import
+# 1. Django bootstrap — must happen before any Django or hdb_client import
 # ---------------------------------------------------------------------
-PROJECT_ROOT = os.environ.get("CDB_PROJECT_ROOT") or os.path.dirname(
+PROJECT_ROOT = os.environ.get("HDB_PROJECT_ROOT") or os.path.dirname(
     os.path.dirname(os.path.abspath(__file__))
 )
 sys.path.insert(0, PROJECT_ROOT)
-os.environ.setdefault("DJANGO_SETTINGS_MODULE", "cdb_project.settings")
+os.environ.setdefault("DJANGO_SETTINGS_MODULE", "hdb_project.settings")
 
 import django  # noqa: E402
 import django.conf  # noqa: E402
@@ -75,8 +75,8 @@ from django.contrib.auth import authenticate  # noqa: E402
 from django.contrib.auth.models import User  # noqa: E402
 from asgiref.sync import sync_to_async  # noqa: E402
 
-from cdb_client import CDBClient  # noqa: E402
-from cdb_client.serializers import instance_brief, institution_brief  # noqa: E402
+from hdb_client import HDBClient  # noqa: E402
+from hdb_client.serializers import instance_brief, institution_brief  # noqa: E402
 
 from mcp.server.fastmcp import FastMCP  # noqa: E402
 from mcp.server.transport_security import TransportSecuritySettings  # noqa: E402
@@ -103,13 +103,13 @@ def require_user() -> User:
     if user is None:
         # Should be unreachable — BasicAuthMiddleware rejects unauthenticated
         # requests before they reach a tool — but tools must not silently
-        # fall back to an unscoped CDBClient() if this ever fires.
+        # fall back to an unscoped HDBClient() if this ever fires.
         raise PermissionError("No authenticated user bound to this request.")
     return user
 
 
-def scoped_client() -> CDBClient:
-    return CDBClient(user=require_user())
+def scoped_client() -> HDBClient:
+    return HDBClient(user=require_user())
 
 
 def django_tool(fn):
@@ -282,14 +282,14 @@ class BasicAuthMiddleware(BaseHTTPMiddleware):
         return JSONResponse(
             {"error": detail},
             status_code=401,
-            headers={"WWW-Authenticate": 'Basic realm="epiCDB"'},
+            headers={"WWW-Authenticate": 'Basic realm="epiHDB"'},
         )
 
 
 # ---------------------------------------------------------------------
 # 4. MCP server + tools
 # ---------------------------------------------------------------------
-mcp = FastMCP("epiCDB")
+mcp = FastMCP("epiHDB")
 
 # The mcp SDK's own DNS-rebinding protection (separate from
 # BasicAuthMiddleware -- this runs inside the SDK's transport layer) only
@@ -307,9 +307,9 @@ mcp = FastMCP("epiCDB")
 # since this isn't a named/persistent tunnel) doesn't require editing
 # this file each time -- just set the env var before launching:
 #
-#   CDB_MCP_PUBLIC_HOST=new-vhs-roses-chronicles.trycloudflare.com \
-#   CDB_PROJECT_ROOT=/path/to/epiCDB python client/mcp_server.py
-_PUBLIC_HOST = os.environ.get("CDB_MCP_PUBLIC_HOST")
+#   HDB_MCP_PUBLIC_HOST=new-vhs-roses-chronicles.trycloudflare.com \
+#   HDB_PROJECT_ROOT=/path/to/epiHDB python client/mcp_server.py
+_PUBLIC_HOST = os.environ.get("HDB_MCP_PUBLIC_HOST")
 _allowed_hosts = ["127.0.0.1:*", "localhost:*"]
 _allowed_origins = [
     "http://127.0.0.1:*", "http://localhost:*",
@@ -320,10 +320,10 @@ if _PUBLIC_HOST:
     _allowed_origins.append(f"https://{_PUBLIC_HOST}")
 else:
     print(
-        "WARNING: CDB_MCP_PUBLIC_HOST is not set. Requests arriving "
+        "WARNING: HDB_MCP_PUBLIC_HOST is not set. Requests arriving "
         "through a public tunnel hostname will be rejected with "
         "'Invalid Host header' by the SDK's DNS-rebinding protection. "
-        "Set CDB_MCP_PUBLIC_HOST to your current tunnel hostname "
+        "Set HDB_MCP_PUBLIC_HOST to your current tunnel hostname "
         "(no scheme, e.g. abc123.trycloudflare.com) before launching.",
         file=sys.stderr,
     )
@@ -336,7 +336,7 @@ mcp.settings.transport_security = TransportSecuritySettings(
 
 @mcp.tool()
 @django_tool
-def cdb_whoami() -> dict:
+def hdb_whoami() -> dict:
     """Return the authenticated user's username, email, and group memberships."""
     user = require_user()
     return {
@@ -349,7 +349,7 @@ def cdb_whoami() -> dict:
 
 @mcp.tool()
 @django_tool
-def cdb_search(query: str, limit: int = 15) -> dict:
+def hdb_search(query: str, limit: int = 15) -> dict:
     """
     Cross-domain keyword search over components, physical inventory
     instances, and designs. Returns brief results per domain (id, name,
@@ -361,7 +361,7 @@ def cdb_search(query: str, limit: int = 15) -> dict:
 
 @mcp.tool()
 @django_tool
-def cdb_where_is(instance_id: str) -> dict:
+def hdb_where_is(instance_id: str) -> dict:
     """
     Current physical location, institution, and ownership of a single
     inventory item, looked up by its UUID primary key.
@@ -371,14 +371,14 @@ def cdb_where_is(instance_id: str) -> dict:
 
 @mcp.tool()
 @django_tool
-def cdb_component_search(query: str, limit: int = 25) -> list[dict]:
+def hdb_component_search(query: str, limit: int = 25) -> list[dict]:
     """Search the Component Catalog by name, alternate name, model number, or description."""
     return scoped_client().catalog.search_brief(query, limit=limit)
 
 
 @mcp.tool()
 @django_tool
-def cdb_component_summary(component_name: str) -> dict:
+def hdb_component_summary(component_name: str) -> dict:
     """
     Full detail for a single catalog Component: description, technical
     system, vendors/sources with cost, typed properties, recent log
@@ -389,14 +389,14 @@ def cdb_component_summary(component_name: str) -> dict:
 
 @mcp.tool()
 @django_tool
-def cdb_instance_search(query: str, limit: int = 25) -> list[dict]:
+def hdb_instance_search(query: str, limit: int = 25) -> list[dict]:
     """Search physical inventory instances by tag, serial number, or component name."""
     return scoped_client().inventory.search_brief(query, limit=limit)
 
 
 @mcp.tool()
 @django_tool
-def cdb_instance_detail(instance_id: str) -> dict:
+def hdb_instance_detail(instance_id: str) -> dict:
     """
     Full detail for a single physical inventory instance, looked up by
     UUID: location, ownership, typed properties, and log history.
@@ -406,7 +406,7 @@ def cdb_instance_detail(instance_id: str) -> dict:
 
 @mcp.tool()
 @django_tool
-def cdb_instances_at_institution(institution_abbreviation: str, limit: int = 25) -> list[dict]:
+def hdb_instances_at_institution(institution_abbreviation: str, limit: int = 25) -> list[dict]:
     """List physical inventory instances currently located at a given institution (e.g. 'BNL')."""
     client = scoped_client()
     return [instance_brief(i) for i in client.inventory.at_institution(institution_abbreviation, limit=limit)]
@@ -414,49 +414,49 @@ def cdb_instances_at_institution(institution_abbreviation: str, limit: int = 25)
 
 @mcp.tool()
 @django_tool
-def cdb_design_search(query: str, limit: int = 25) -> list[dict]:
+def hdb_design_search(query: str, limit: int = 25) -> list[dict]:
     """Search the Design Library by name or description."""
     return scoped_client().designs.search_brief(query, limit=limit)
 
 
 @mcp.tool()
 @django_tool
-def cdb_design_summary(design_name: str) -> dict:
+def hdb_design_summary(design_name: str) -> dict:
     """Full detail for a design, including its recursive Bill of Materials."""
     return scoped_client().designs.summary(design_name)
 
 
 @mcp.tool()
 @django_tool
-def cdb_design_bom(design_name: str) -> list[dict]:
+def hdb_design_bom(design_name: str) -> list[dict]:
     """Recursive Bill of Materials for a named design (nested components and sub-designs)."""
     return scoped_client().designs.bom(design_name)
 
 
 @mcp.tool()
 @django_tool
-def cdb_list_institutions() -> list[dict]:
+def hdb_list_institutions() -> list[dict]:
     """List all institutions participating in the collaboration (reference data, not scoped)."""
     return [institution_brief(i) for i in scoped_client().locations.all_institutions()]
 
 
 @mcp.tool()
 @django_tool
-def cdb_location_tree(institution_abbreviation: str) -> list[dict]:
+def hdb_location_tree(institution_abbreviation: str) -> list[dict]:
     """Nested Building -> Room -> Cabinet -> Shelf hierarchy for one institution."""
     return scoped_client().locations.location_tree(institution_abbreviation)
 
 
 @mcp.tool()
 @django_tool
-def cdb_systems_overview() -> list[dict]:
+def hdb_systems_overview() -> list[dict]:
     """Technical systems (Tracking, Calorimetry, ...) with component and instance counts."""
     return scoped_client().systems.instance_counts()
 
 
 @mcp.tool()
 @django_tool
-def cdb_create_instance(
+def hdb_create_instance(
     component_name: str,
     tag: str = "",
     serial_number: str = "",

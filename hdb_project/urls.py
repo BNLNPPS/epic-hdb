@@ -5,13 +5,13 @@ from django.urls import path, include
 
 urlpatterns = [
     path("admin/", admin.site.urls),
-    path("",       include("cdb.urls_web")),   # web UI (server-rendered)
+    path("",       include("hdb.urls_web")),   # web UI (server-rendered)
 ]
 
 # REST API routes — only registered when djangorestframework is installed.
 try:
     import rest_framework  # noqa
-    from cdb import views
+    from hdb import views
     urlpatterns += [
         path("api/",                                     views.api_root,                        name="api-root"),
         path("api/groups/",                              views.GroupListView.as_view(),          name="group-list"),

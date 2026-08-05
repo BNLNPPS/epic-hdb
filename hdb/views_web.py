@@ -1,6 +1,6 @@
 """
-CDB web views — server-rendered Django pages.
-URL config: cdb/urls_web.py
+HDB web views — server-rendered Django pages.
+URL config: hdb/urls_web.py
 """
 import io
 from itertools import groupby

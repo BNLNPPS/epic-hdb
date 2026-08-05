@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 smoke_test.py — end-to-end check of mcp_server.py against a running
-instance, using the real epiCDB seed data (`python manage.py seed_cdb`).
+instance, using the real epiHDB seed data (`python manage.py seed_hdb`).
 
 Covers two layers:
 
@@ -20,9 +20,9 @@ Covers two layers:
 
 Usage
 -----
-    # 1. In one terminal, from the epiCDB project root:
-    python manage.py seed_cdb          # idempotent, safe to re-run
-    CDB_PROJECT_ROOT=$(pwd) python client/mcp_server.py
+    # 1. In one terminal, from the epiHDB project root:
+    python manage.py seed_hdb          # idempotent, safe to re-run
+    HDB_PROJECT_ROOT=$(pwd) python client/mcp_server.py
 
     # 2. In another terminal:
     pip install httpx "mcp[cli]"
@@ -132,13 +132,13 @@ def run_mcp_checks(base_url: str, username: str, password: str) -> None:
                 tools = (await session.list_tools()).tools
                 names = {t.name for t in tools}
                 expected = {
-                    "cdb_whoami", "cdb_search", "cdb_where_is",
-                    "cdb_component_search", "cdb_component_summary",
-                    "cdb_instance_search", "cdb_instance_detail",
-                    "cdb_instances_at_institution", "cdb_design_search",
-                    "cdb_design_summary", "cdb_design_bom",
-                    "cdb_list_institutions", "cdb_location_tree",
-                    "cdb_systems_overview", "cdb_create_instance",
+                    "hdb_whoami", "hdb_search", "hdb_where_is",
+                    "hdb_component_search", "hdb_component_summary",
+                    "hdb_instance_search", "hdb_instance_detail",
+                    "hdb_instances_at_institution", "hdb_design_search",
+                    "hdb_design_summary", "hdb_design_bom",
+                    "hdb_list_institutions", "hdb_location_tree",
+                    "hdb_systems_overview", "hdb_create_instance",
                 }
                 check("all expected tools registered", expected <= names,
                       f"missing: {expected - names}")
@@ -154,9 +154,9 @@ def run_mcp_checks(base_url: str, username: str, password: str) -> None:
                 # Normalize all three into an actual Python list rather
                 # than assuming any single one of these shapes.
                 LIST_TOOLS = {
-                    "cdb_component_search", "cdb_instance_search", "cdb_design_search",
-                    "cdb_instances_at_institution", "cdb_list_institutions",
-                    "cdb_location_tree", "cdb_systems_overview", "cdb_design_bom",
+                    "hdb_component_search", "hdb_instance_search", "hdb_design_search",
+                    "hdb_instances_at_institution", "hdb_list_institutions",
+                    "hdb_location_tree", "hdb_systems_overview", "hdb_design_bom",
                 }
 
                 async def call(tool_name: str, **kwargs):
@@ -192,82 +192,82 @@ def run_mcp_checks(base_url: str, username: str, password: str) -> None:
                     return parsed
 
                 # -- identity ---------------------------------------------
-                who = await call("cdb_whoami")
-                check("cdb_whoami reports correct username",
+                who = await call("hdb_whoami")
+                check("hdb_whoami reports correct username",
                       isinstance(who, dict) and who.get("username") == username, f"got {who}")
-                check("cdb_whoami reports BEMC group membership",
+                check("hdb_whoami reports BEMC group membership",
                       isinstance(who, dict) and "BEMC" in who.get("groups", []), f"got {who}")
 
                 # -- reads against real seed data --------------------------
-                search = await call("cdb_search", query="Crystal")
+                search = await call("hdb_search", query="Crystal")
                 comp_names = ({c["name"] for c in search.get("components", [])}
                               if isinstance(search, dict) else set())
-                check("cdb_search('Crystal') finds PbWO4 Crystal",
+                check("hdb_search('Crystal') finds PbWO4 Crystal",
                       "PbWO4 Crystal" in comp_names, f"got {comp_names}")
 
-                summary = await call("cdb_component_summary", component_name="PbWO4 Crystal")
-                check("cdb_component_summary returns instance_count >= 1",
+                summary = await call("hdb_component_summary", component_name="PbWO4 Crystal")
+                check("hdb_component_summary returns instance_count >= 1",
                       isinstance(summary, dict) and summary.get("instance_count", 0) >= 1,
                       f"got {summary}")
 
-                inst_hits = await call("cdb_instance_search", query="BEMC-CRYSTAL")
+                inst_hits = await call("hdb_instance_search", query="BEMC-CRYSTAL")
                 have_inst_hits = check(
-                    "cdb_instance_search finds a BEMC-CRYSTAL instance",
+                    "hdb_instance_search finds a BEMC-CRYSTAL instance",
                     isinstance(inst_hits, list) and len(inst_hits) >= 1, f"got {inst_hits}",
                 )
                 inst_id = inst_hits[0]["id"] if have_inst_hits else None
 
                 if inst_id:
-                    detail = await call("cdb_instance_detail", instance_id=inst_id)
-                    check("cdb_instance_detail matches searched instance",
+                    detail = await call("hdb_instance_detail", instance_id=inst_id)
+                    check("hdb_instance_detail matches searched instance",
                           isinstance(detail, dict) and detail.get("component") == "PbWO4 Crystal",
                           f"got {detail}")
 
-                    where = await call("cdb_where_is", instance_id=inst_id)
-                    check("cdb_where_is reports an institution",
+                    where = await call("hdb_where_is", instance_id=inst_id)
+                    check("hdb_where_is reports an institution",
                           isinstance(where, dict) and bool(where.get("institution")), f"got {where}")
                 else:
-                    check("cdb_instance_detail matches searched instance", False,
+                    check("hdb_instance_detail matches searched instance", False,
                           "skipped: no instance id from previous search")
-                    check("cdb_where_is reports an institution", False,
+                    check("hdb_where_is reports an institution", False,
                           "skipped: no instance id from previous search")
 
-                at_cua = await call("cdb_instances_at_institution", institution_abbreviation="CUA")
-                check("cdb_instances_at_institution('CUA') returns a list",
+                at_cua = await call("hdb_instances_at_institution", institution_abbreviation="CUA")
+                check("hdb_instances_at_institution('CUA') returns a list",
                       isinstance(at_cua, list), f"got {at_cua}")
 
-                designs = await call("cdb_design_search", query="BEMC")
-                have_designs = check("cdb_design_search returns a list",
+                designs = await call("hdb_design_search", query="BEMC")
+                have_designs = check("hdb_design_search returns a list",
                                       isinstance(designs, list), f"got {designs}")
                 design_names = {d["name"] for d in designs} if have_designs else set()
-                check("cdb_design_search('BEMC') finds BEMC tower",
+                check("hdb_design_search('BEMC') finds BEMC tower",
                       "BEMC tower" in design_names, f"got {design_names}")
 
-                bom = await call("cdb_design_bom", design_name="BEMC tower")
-                have_bom = check("cdb_design_bom returns a list", isinstance(bom, list), f"got {bom}")
+                bom = await call("hdb_design_bom", design_name="BEMC tower")
+                have_bom = check("hdb_design_bom returns a list", isinstance(bom, list), f"got {bom}")
                 bom_elements = {row["element"] for row in bom} if have_bom else set()
-                check("cdb_design_bom('BEMC tower') has Crystal + SiPM elements",
+                check("hdb_design_bom('BEMC tower') has Crystal + SiPM elements",
                       {"Crystal", "SiPM"} <= bom_elements, f"got {bom_elements}")
 
-                insts = await call("cdb_list_institutions")
-                have_insts = check("cdb_list_institutions returns a list",
+                insts = await call("hdb_list_institutions")
+                have_insts = check("hdb_list_institutions returns a list",
                                     isinstance(insts, list), f"got {insts}")
                 inst_abbrs = {i["abbreviation"] for i in insts} if have_insts else set()
-                check("cdb_list_institutions includes seed institutions",
+                check("hdb_list_institutions includes seed institutions",
                       {"CUA", "UIC", "BNL", "UH"} <= inst_abbrs, f"got {inst_abbrs}")
 
-                tree = await call("cdb_location_tree", institution_abbreviation="CUA")
-                check("cdb_location_tree('CUA') returns a non-empty list",
+                tree = await call("hdb_location_tree", institution_abbreviation="CUA")
+                check("hdb_location_tree('CUA') returns a non-empty list",
                       isinstance(tree, list) and len(tree) > 0, f"got {tree}")
 
-                systems = await call("cdb_systems_overview")
-                check("cdb_systems_overview returns a list", isinstance(systems, list), f"got {systems}")
+                systems = await call("hdb_systems_overview")
+                check("hdb_systems_overview returns a list", isinstance(systems, list), f"got {systems}")
 
                 # -- write path: ownership permission boundary ------------
                 # crafts belongs to BEMC, not BTOF.
                 try:
                     await call(
-                        "cdb_create_instance",
+                        "hdb_create_instance",
                         component_name="PbWO4 Crystal",
                         tag="smoke-test-should-fail",
                         owner_group_name="BTOF",
@@ -278,7 +278,7 @@ def run_mcp_checks(base_url: str, username: str, password: str) -> None:
                     check("create with foreign owner_group is rejected", True, str(exc))
 
                 created = await call(
-                    "cdb_create_instance",
+                    "hdb_create_instance",
                     component_name="PbWO4 Crystal",
                     tag="smoke-test-ok",
                     owner_group_name="BEMC",

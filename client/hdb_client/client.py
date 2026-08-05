@@ -1,8 +1,8 @@
 """
-CDBClient — unified, user-scoped entry point aggregating all domain clients.
+HDBClient — unified, user-scoped entry point aggregating all domain clients.
 
-    client = CDBClient(user=django_user)   # MCP: always pass the authenticated user
-    client = CDBClient()                   # CLI / trusted shell: no scoping
+    client = HDBClient(user=django_user)   # MCP: always pass the authenticated user
+    client = HDBClient()                   # CLI / trusted shell: no scoping
 
 `locations` and `systems` are unchanged from the original client — Location,
 Institution, and TechnicalSystem carry no OwnedModel fields, so there's no
@@ -17,7 +17,7 @@ from .designs import DesignClient
 DEFAULT_LIMIT = 15
 
 
-class CDBClient:
+class HDBClient:
     def __init__(self, user=None):
         self.user = user
         self.locations = LocationClient()

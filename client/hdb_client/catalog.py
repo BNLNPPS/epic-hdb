@@ -24,6 +24,10 @@ class CatalogClient:
         qs = _m().Component.objects.select_related("technical_system", "owner_group", "owner_user")
         return access.visible_to(qs, self.user)
 
+    def all_components(self):
+        """All visible components (used by the CLI's `find component` command)."""
+        return self._qs()
+
     def search(self, query: str, limit: int = DEFAULT_LIMIT):
         from django.db.models import Q
 

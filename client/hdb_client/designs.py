@@ -25,6 +25,10 @@ class DesignClient:
         qs = _m().Design.objects.select_related("owner_group", "owner_user")
         return access.visible_to(qs, self.user)
 
+    def all_designs(self):
+        """All visible designs (used by the CLI's `find design` command)."""
+        return self._qs()
+
     def get(self, name: str | None = None, pk: str | None = None):
         qs = access.visible_to(_m().Design.objects, self.user)
         if pk:
@@ -42,8 +46,8 @@ class DesignClient:
 
     def elements_of(self, design_name: str):
         return _m().DesignElement.objects.filter(design__name=design_name).select_related(
-            "component", "child_design", "installed_instance"
-        )
+            "component", "child_design"
+        ).prefetch_related("installed_instances__instance")
 
     def bom(self, design_name: str, _depth: int = 0, _max: int = MAX_BOM_DEPTH) -> list[dict]:
         if _depth > _max:
@@ -62,7 +66,12 @@ class DesignClient:
             else:
                 entry["ref"] = el.component.name if el.component else None
                 entry["model_number"] = el.component.model_number if el.component else None
-                entry["installed_id"] = str(el.installed_instance.pk) if el.installed_instance else None
+                # A DesignElement with quantity > 1 can have more than one
+                # installed instance (one per slot) -- installed_instances is
+                # the plural reverse relation, there is no singular FK here.
+                entry["installed_ids"] = [
+                    str(dei.instance_id) for dei in el.installed_instances.all()
+                ]
                 entry["children"] = []
             rows.append(entry)
         return rows

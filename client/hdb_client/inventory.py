@@ -29,6 +29,10 @@ class InventoryClient:
         )
         return access.visible_to(qs, self.user)
 
+    def all_instances(self):
+        """All visible instances (used by the CLI's `find instance` command)."""
+        return self._qs()
+
     def get(self, pk: str):
         return self._qs().get(pk=pk)
 

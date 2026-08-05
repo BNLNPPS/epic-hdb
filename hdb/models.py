@@ -1,5 +1,5 @@
 """
-Component Database (CDB) models.
+Hardware Database (HDB) models.
 Three primary domains: Component Catalog, Component Inventory, Design.
 Supporting: Institution, Location, Ownership, Properties, Logs.
 Groups use Django's built-in auth.Group.
@@ -213,7 +213,7 @@ class LogEntry(models.Model):
     topic      = models.CharField(max_length=32, choices=TOPIC_CHOICES, blank=True, default="")
     entry      = models.TextField()
     attachment = models.FileField(upload_to="log_attachments/", null=True, blank=True)
-    logged_by  = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL, related_name="cdb_log_entries")
+    logged_by  = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL, related_name="hdb_log_entries")
     timestamp  = models.DateTimeField(default=timezone.now)
 
     component          = models.ForeignKey("Component",         null=True, blank=True, on_delete=models.CASCADE, related_name="log_entries")
@@ -525,7 +525,7 @@ class DesignElementInstance(models.Model):
 # ---------------------------------------------------------------------------
 
 class UserProfile(models.Model):
-    """Extends Django's built-in User with CDB-specific attributes."""
+    """Extends Django's built-in User with HDB-specific attributes."""
     id          = models.CharField(max_length=36, primary_key=True, editable=False)
     user        = models.OneToOneField(User, on_delete=models.CASCADE, related_name='profile')
     # Mandatory, same reasoning as Location.institution -- a profile's home

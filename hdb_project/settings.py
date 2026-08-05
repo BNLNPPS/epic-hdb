@@ -1,5 +1,5 @@
 """
-Django settings for cdb_project project.
+Django settings for hdb_project project.
 """
 
 from pathlib import Path
@@ -19,7 +19,7 @@ CSRF_TRUSTED_ORIGINS = [
 # rather than a OneToOneField. Deliberate -- the DB constraint is identical
 # either way, but a real OneToOneField's reverse accessor returns a single
 # object (raising DoesNotExist if unset) instead of the manager-style
-# accessor (.all(), .exists(), prefetch_related) that cdb/views_web.py and
+# accessor (.all(), .exists(), prefetch_related) that hdb/views_web.py and
 # inventory_detail.html rely on via ComponentInstance.design_installations.
 # Switching would mean reworking those call sites for no functional gain,
 # so this specific warning is silenced rather than "fixed".
@@ -34,7 +34,7 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
-    'cdb',
+    'hdb',
 ]
 
 # djangorestframework is optional — install with: pip install djangorestframework
@@ -74,7 +74,7 @@ MIDDLEWARE = [
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
 
-ROOT_URLCONF = 'cdb_project.urls'
+ROOT_URLCONF = 'hdb_project.urls'
 
 TEMPLATES = [
     {
@@ -91,7 +91,7 @@ TEMPLATES = [
     },
 ]
 
-WSGI_APPLICATION = 'cdb_project.wsgi.application'
+WSGI_APPLICATION = 'hdb_project.wsgi.application'
 
 
 # Database
@@ -139,4 +139,4 @@ STATIC_URL = 'static/'
 # Media (user-uploaded files: log attachments, property documents/images)
 
 MEDIA_URL = '/media/'
-MEDIA_ROOT = '/var/data/cdb/media'
+MEDIA_ROOT = '/var/data/hdb/media'

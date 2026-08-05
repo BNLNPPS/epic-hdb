@@ -1,5 +1,5 @@
 """
-CDB REST API views.
+HDB REST API views.
 
 Endpoint map
 ────────────

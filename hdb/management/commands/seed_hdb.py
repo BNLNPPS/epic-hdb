@@ -1,8 +1,8 @@
 """
-Management command: python manage.py seed_cdb
-Populates the CDB with the BEMC / BTOF sample dataset.
+Management command: python manage.py seed_hdb
+Populates the HDB with the BEMC / BTOF sample dataset.
 
-Kept in sync with the current cdb/models.py schema -- it only touches
+Kept in sync with the current hdb/models.py schema -- it only touches
 fields and models that actually exist there. In particular:
   * There is no ComponentFunction model and no Component.function field,
     so components are described directly via name/description instead.
@@ -24,7 +24,7 @@ from django.contrib.auth.models import User, Group
 from django.core.files import File
 from django.core.management.base import BaseCommand
 from django.utils import timezone
-from cdb.models import (
+from hdb.models import (
     Institution, Location, TechnicalSystem, Component, ComponentInstance,
     UserProfile, PropertyType, PropertyValue, Design, DesignElement,
     DesignTemplate, DesignTemplateElement, LogEntry,
@@ -32,10 +32,10 @@ from cdb.models import (
 
 
 class Command(BaseCommand):
-    help = "Seed the CDB with the BEMC/BTOF sample dataset"
+    help = "Seed the HDB with the BEMC/BTOF sample dataset"
 
     def handle(self, *args, **options):
-        self.stdout.write("Seeding CDB …")
+        self.stdout.write("Seeding HDB …")
 
         # Groups
         grp = {}

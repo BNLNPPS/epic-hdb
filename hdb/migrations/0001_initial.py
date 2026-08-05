@@ -90,7 +90,7 @@ class Migration(migrations.Migration):
                 ('tag', models.CharField(blank=True, max_length=128)),
                 ('serial_number', models.CharField(blank=True, max_length=128)),
                 ('description', models.TextField(blank=True)),
-                ('component', models.ForeignKey(on_delete=django.db.models.deletion.PROTECT, related_name='instances', to='cdb.component')),
+                ('component', models.ForeignKey(on_delete=django.db.models.deletion.PROTECT, related_name='instances', to='hdb.component')),
                 ('created_by', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='+', to=settings.AUTH_USER_MODEL)),
                 ('modified_by', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='+', to=settings.AUTH_USER_MODEL)),
                 ('owner_group', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='+', to='auth.group')),
@@ -126,9 +126,9 @@ class Migration(migrations.Migration):
                 ('element_name', models.CharField(max_length=128)),
                 ('quantity', models.PositiveIntegerField(default=1)),
                 ('description', models.TextField(blank=True)),
-                ('child_design', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='parent_elements', to='cdb.design')),
-                ('component', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='design_memberships', to='cdb.component')),
-                ('design', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='elements', to='cdb.design')),
+                ('child_design', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='parent_elements', to='hdb.design')),
+                ('component', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='design_memberships', to='hdb.component')),
+                ('design', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='elements', to='hdb.design')),
             ],
             options={
                 'ordering': ['element_name'],
@@ -139,8 +139,8 @@ class Migration(migrations.Migration):
             name='DesignElementInstance',
             fields=[
                 ('id', models.CharField(editable=False, max_length=36, primary_key=True, serialize=False)),
-                ('element', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='installed_instances', to='cdb.designelement')),
-                ('instance', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='design_installations', to='cdb.componentinstance', unique=True)),
+                ('element', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='installed_instances', to='hdb.designelement')),
+                ('instance', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='design_installations', to='hdb.componentinstance', unique=True)),
             ],
             options={
                 'ordering': ['instance__tag'],
@@ -168,7 +168,7 @@ class Migration(migrations.Migration):
         migrations.AddField(
             model_name='design',
             name='template',
-            field=models.ForeignKey(blank=True, help_text='Template this design was instantiated from, if any.', null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='designs', to='cdb.designtemplate'),
+            field=models.ForeignKey(blank=True, help_text='Template this design was instantiated from, if any.', null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='designs', to='hdb.designtemplate'),
         ),
         migrations.CreateModel(
             name='Location',
@@ -177,8 +177,8 @@ class Migration(migrations.Migration):
                 ('name', models.CharField(max_length=128)),
                 ('location_type', models.CharField(choices=[('building', 'Building'), ('room', 'Room'), ('cabinet', 'Cabinet'), ('shelf', 'Shelf'), ('other', 'Other')], default='room', max_length=16)),
                 ('description', models.TextField(blank=True)),
-                ('institution', models.ForeignKey(on_delete=django.db.models.deletion.PROTECT, related_name='locations', to='cdb.institution')),
-                ('parent', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='children', to='cdb.location')),
+                ('institution', models.ForeignKey(on_delete=django.db.models.deletion.PROTECT, related_name='locations', to='hdb.institution')),
+                ('parent', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='children', to='hdb.location')),
             ],
             options={
                 'ordering': ['name'],
@@ -187,12 +187,12 @@ class Migration(migrations.Migration):
         migrations.AddField(
             model_name='design',
             name='location',
-            field=models.ForeignKey(blank=True, help_text='Where this design is being assembled. A design lives in exactly one place, so placeholder replacement offers only inventory instances stored at this location.', null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='designs', to='cdb.location'),
+            field=models.ForeignKey(blank=True, help_text='Where this design is being assembled. A design lives in exactly one place, so placeholder replacement offers only inventory instances stored at this location.', null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='designs', to='hdb.location'),
         ),
         migrations.AddField(
             model_name='componentinstance',
             name='location',
-            field=models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='instances', to='cdb.location'),
+            field=models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='instances', to='hdb.location'),
         ),
         migrations.CreateModel(
             name='LogEntry',
@@ -202,10 +202,10 @@ class Migration(migrations.Migration):
                 ('entry', models.TextField()),
                 ('attachment', models.FileField(blank=True, null=True, upload_to='log_attachments/')),
                 ('timestamp', models.DateTimeField(default=django.utils.timezone.now)),
-                ('component', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.CASCADE, related_name='log_entries', to='cdb.component')),
-                ('component_instance', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.CASCADE, related_name='log_entries', to='cdb.componentinstance')),
-                ('design', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.CASCADE, related_name='log_entries', to='cdb.design')),
-                ('logged_by', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='cdb_log_entries', to=settings.AUTH_USER_MODEL)),
+                ('component', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.CASCADE, related_name='log_entries', to='hdb.component')),
+                ('component_instance', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.CASCADE, related_name='log_entries', to='hdb.componentinstance')),
+                ('design', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.CASCADE, related_name='log_entries', to='hdb.design')),
+                ('logged_by', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='hdb_log_entries', to=settings.AUTH_USER_MODEL)),
             ],
             options={
                 'ordering': ['-timestamp'],
@@ -224,11 +224,11 @@ class Migration(migrations.Migration):
                 ('user_writable', models.BooleanField(default=True)),
                 ('created_on', models.DateTimeField(default=django.utils.timezone.now, editable=False)),
                 ('modified_on', models.DateTimeField(auto_now=True)),
-                ('component', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.CASCADE, related_name='properties', to='cdb.component')),
-                ('component_instance', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.CASCADE, related_name='properties', to='cdb.componentinstance')),
-                ('design', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.CASCADE, related_name='properties', to='cdb.design')),
-                ('design_element', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.CASCADE, related_name='properties', to='cdb.designelement')),
-                ('property_type', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, to='cdb.propertytype')),
+                ('component', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.CASCADE, related_name='properties', to='hdb.component')),
+                ('component_instance', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.CASCADE, related_name='properties', to='hdb.componentinstance')),
+                ('design', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.CASCADE, related_name='properties', to='hdb.design')),
+                ('design_element', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.CASCADE, related_name='properties', to='hdb.designelement')),
+                ('property_type', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, to='hdb.propertytype')),
             ],
             options={
                 'ordering': ['property_type__name'],
@@ -242,8 +242,8 @@ class Migration(migrations.Migration):
                 ('cost', models.DecimalField(blank=True, decimal_places=2, max_digits=12, null=True)),
                 ('role', models.CharField(choices=[('vendor', 'Vendor'), ('manufacturer', 'Manufacturer'), ('both', 'Vendor & Manufacturer')], default='vendor', max_length=16)),
                 ('description', models.TextField(blank=True)),
-                ('component', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, to='cdb.component')),
-                ('source', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, to='cdb.source')),
+                ('component', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, to='hdb.component')),
+                ('source', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, to='hdb.source')),
             ],
             options={
                 'unique_together': {('component', 'source')},
@@ -252,7 +252,7 @@ class Migration(migrations.Migration):
         migrations.AddField(
             model_name='component',
             name='sources',
-            field=models.ManyToManyField(blank=True, through='cdb.ComponentSource', to='cdb.source'),
+            field=models.ManyToManyField(blank=True, through='hdb.ComponentSource', to='hdb.source'),
         ),
         migrations.CreateModel(
             name='TechnicalSystem',
@@ -269,18 +269,18 @@ class Migration(migrations.Migration):
         migrations.AddField(
             model_name='componentinstance',
             name='technical_system',
-            field=models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='component_instances', to='cdb.technicalsystem'),
+            field=models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='component_instances', to='hdb.technicalsystem'),
         ),
         migrations.AddField(
             model_name='component',
             name='technical_system',
-            field=models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='components', to='cdb.technicalsystem'),
+            field=models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='components', to='hdb.technicalsystem'),
         ),
         migrations.CreateModel(
             name='UserProfile',
             fields=[
                 ('id', models.CharField(editable=False, max_length=36, primary_key=True, serialize=False)),
-                ('institution', models.ForeignKey(on_delete=django.db.models.deletion.PROTECT, related_name='users', to='cdb.institution')),
+                ('institution', models.ForeignKey(on_delete=django.db.models.deletion.PROTECT, related_name='users', to='hdb.institution')),
                 ('user', models.OneToOneField(on_delete=django.db.models.deletion.CASCADE, related_name='profile', to=settings.AUTH_USER_MODEL)),
             ],
         ),
@@ -291,8 +291,8 @@ class Migration(migrations.Migration):
                 ('element_name', models.CharField(max_length=128)),
                 ('quantity', models.PositiveIntegerField(default=1)),
                 ('description', models.TextField(blank=True)),
-                ('component', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='template_memberships', to='cdb.component')),
-                ('template', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='elements', to='cdb.designtemplate')),
+                ('component', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='template_memberships', to='hdb.component')),
+                ('template', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='elements', to='hdb.designtemplate')),
             ],
             options={
                 'ordering': ['element_name'],
