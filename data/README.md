@@ -1,6 +1,6 @@
 # The data folder
 
-This is the place to store inputs necessary for testing the CDB client.
+This is the place to store inputs necessary for testing the HDB client.
 
 Example:
 
