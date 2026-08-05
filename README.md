@@ -1,9 +1,9 @@
-# Hardware Database (HDB) — Django Implementation
+# The ePIC Hardware Database
 
-A Django implementation of the Hardware Database described in *The Component
-Database User Guide* (Argonne National Laboratory / ePIC). The CDB is the
+This is a Django implementation of the Hardware Database inspired by *The Component
+Database User Guide* (Argonne National Laboratory / ePIC). The Hardware Database is the
 central repository for documenting, organizing, and tracking components used
-in a particle physics accelerator or detector project.
+in ePIC.
 
 ---
 
@@ -34,7 +34,7 @@ in a particle physics accelerator or detector project.
 
 ## Overview
 
-The CDB captures three interrelated domains:
+This Database captures three interrelated domains:
 
 | Domain | Purpose |
 |--------|---------|
@@ -51,7 +51,7 @@ lifecycle events across all domains.
 ## Project Structure
 
 ```
-epiCDB/
+epic-hdb/
 ├── manage.py
 ├── cdb_project/
 │   ├── settings.py
@@ -266,7 +266,7 @@ abstract `OwnedModel`, which supplies:
 | Field | Description |
 |-------|-------------|
 | `owner_user` | Individual owner (Django User) |
-| `owner_group` | Owning group (CDB `Group`) |
+| `owner_group` | Owning group (HDB `Group`) |
 | `group_writeable` | Whether group members can edit |
 | `created_by` / `created_on` | Creation audit trail |
 | `modified_by` / `modified_on` | Modification audit trail |
@@ -278,7 +278,7 @@ abstract `OwnedModel`, which supplies:
 ## Django Admin
 
 The admin interface at `/admin/` provides full CRUD access to all models,
-mirroring the CDB portal's layout:
+mirroring the HDB portal's layout:
 
 - **Institution** pages include an inline table of all their locations.
 - **Component** pages include inline tables for sources, properties,
@@ -301,8 +301,8 @@ returning a plain dict or list.
 
 ```python
 import sys, os
-sys.path.insert(0, "/path/to/epiCDB")          # Django project root
-sys.path.insert(0, "/path/to/epiCDB/client")   # cdb_client package
+sys.path.insert(0, "/path/to/epic-hdb")          # Django project root
+sys.path.insert(0, "/path/to/epic-hdb/client")   # cdb_client package
 os.environ["DJANGO_SETTINGS_MODULE"] = "cdb_project.settings"
 import django; django.setup()
 

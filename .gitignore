@@ -13,8 +13,12 @@ __pycache__/
 db.sqlite3
 
 # Django stuff:
-*/migrations/*
-*migrations*
+# NOTE: migrations are intentionally tracked (cdb/migrations/*.py) --
+# they define the schema, and a fresh clone without them has no
+# app tables at all ("no such table" on every model). Only ignore
+# bytecode caches inside the migrations package, not the migrations
+# themselves.
+*/migrations/__pycache__/
 
 # C extensions
 *.so
