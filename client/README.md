@@ -42,12 +42,29 @@ Nothing here needs `djangorestframework` — that's only used by the web app's
 
 ## 1. The `hdb_client` Python library
 
-Import it directly in a script, a Django shell (`manage.py shell`), or a
-Jupyter notebook running inside the project's virtualenv:
+Inside `manage.py shell` or any Django management command, Django is already
+configured — just `from hdb_client import HDBClient` and go. Nothing below
+this paragraph is needed in that case.
+
+From a *plain* Python script (not launched through `manage.py`), Django has
+no idea where your settings module is until you tell it, via the
+`DJANGO_SETTINGS_MODULE` environment variable — `django.setup()` alone raises
+`ImproperlyConfigured` without it. You also need two separate directories on
+`sys.path`: the project root (for `hdb_project.settings`, and for `hdb_client`
+to reach the Django app's `hdb.models`) and `client/` (for `hdb_client`
+itself). Order matters: the project root must come *before* `client/`, or
+Python resolves the bare name `hdb` to `client/hdb.py` (the CLI script)
+instead of the real `hdb/` Django app package, and everything breaks with a
+confusing `ImportError: cannot import name 'models' from 'hdb'`.
 
 ```python
-import django
-django.setup()   # if not already configured, e.g. outside manage.py
+import os, sys, django
+
+ROOT = "/path/to/epic-hdb"          # repo root, next to manage.py
+sys.path.insert(0, ROOT + "/client")  # so `import hdb_client` resolves
+sys.path.insert(0, ROOT)              # must win over client/hdb.py -- insert last
+os.environ.setdefault("DJANGO_SETTINGS_MODULE", "hdb_project.settings")
+django.setup()
 
 from hdb_client import HDBClient
 from django.contrib.auth.models import User
@@ -59,6 +76,18 @@ client = HDBClient()
 crafts = User.objects.get(username="crafts")
 client = HDBClient(user=crafts)
 ```
+
+This is exactly what `client/hdb_client/_bootstrap.py`'s `_bootstrap()`
+helper does (it's what every domain module calls internally via `_m()` to
+reach `hdb.models` lazily) — but note it is *not* currently called by
+anything for this exact purpose, and its `project_root` argument only adds
+one path (the root, for settings), not `client/` itself. So it works
+unmodified for code living *inside* `hdb_client`, but an external script
+importing `hdb_client` from outside the package still needs the two-path
+setup above; `hdb.py` and `mcp_server.py` each additionally rely on Python's
+own "script directory goes on sys.path[0] automatically" behavior to get
+`client/` for free, since they *are* files inside `client/`, which is why
+their bootstrap code only inserts the project root explicitly.
 
 `HDBClient` aggregates five sub-clients, each covering one domain:
 
