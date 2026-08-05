@@ -26,6 +26,10 @@ Options
   --settings  Django settings module  [default: hdb_project.settings]
   --root      Project root directory  [default: parent of bin/]
   --yaml      Force YAML output for all commands
+  --user      Django username to act as for write operations
+              (required for create-instance; the created record is always
+              owned by this user -- there is no way to set ownership to
+              someone else, by design, see hdb_client/access.py)
 """
 
 import argparse
@@ -50,7 +54,17 @@ def _setup(args):
         django.setup()
 
     from hdb_client import HDBClient
-    return HDBClient()
+
+    django_user = None
+    if getattr(args, "user", None):
+        from django.contrib.auth.models import User
+        try:
+            django_user = User.objects.get(username=args.user)
+        except User.DoesNotExist:
+            print(f"Error: no such Django user {args.user!r}.", file=sys.stderr)
+            sys.exit(1)
+
+    return HDBClient(user=django_user)
 
 
 # ---------------------------------------------------------------------------
@@ -314,15 +328,18 @@ def cmd_find(client, args):
 def cmd_create_instance(client, args):
     """Create a new ComponentInstance linked to a given Component.
 
+    Requires --user (the created record's owner_user is always that Django
+    user -- there is no flag to set ownership to anyone else, by design).
+
     Individual flags
     ----------------
-      bin/hdb create-instance --by-name "ePIC SVT Strip Sensor" --tag SN-001
-      bin/hdb create-instance --by-pk   <UUID> --serial 20240101 --group SVT
+      bin/hdb --user crafts create-instance --by-name "ePIC SVT Strip Sensor" --tag SN-001
+      bin/hdb --user crafts create-instance --by-pk   <UUID> --serial 20240101 --group BEMC
 
     YAML file input
     ---------------
-      bin/hdb create-instance --from-yaml instance.yaml
-      bin/hdb create-instance --from-yaml -          # read from stdin
+      bin/hdb --user crafts create-instance --from-yaml instance.yaml
+      bin/hdb --user crafts create-instance --from-yaml -          # read from stdin
 
     YAML file format::
 
@@ -330,13 +347,11 @@ def cmd_create_instance(client, args):
       tag: SN-042
       serial: "20240315-001"
       location: "Room 112B"
-      group: SVT
-      owner: jsmith
+      group: BEMC
       description: "Batch 7, received 2024-03-15"
     """
     # ── Load inputs: YAML file or individual flags ───────────────────────────
     if args.from_yaml:
-        import io
         if args.from_yaml == "-":
             raw = sys.stdin.read()
         else:
@@ -357,7 +372,6 @@ def cmd_create_instance(client, args):
         serial      = str(data_in.get("serial", ""))
         location    = data_in.get("location")
         group       = data_in.get("group")
-        owner       = data_in.get("owner")
         description = str(data_in.get("description", ""))
     else:
         by_name     = args.by_name
@@ -366,7 +380,6 @@ def cmd_create_instance(client, args):
         serial      = args.serial
         location    = args.location
         group       = args.group
-        owner       = args.owner
         description = args.description
 
     if not by_name and not by_pk:
@@ -374,23 +387,16 @@ def cmd_create_instance(client, args):
               file=sys.stderr)
         sys.exit(1)
 
-    # ── Resolve component ────────────────────────────────────────────────────
-    try:
-        comp = client.catalog.get(pk=by_pk) if by_pk else client.catalog.get(name=by_name)
-    except Exception as exc:
-        print(f"Component not found: {exc}", file=sys.stderr)
-        sys.exit(1)
-
     # ── Create instance ──────────────────────────────────────────────────────
     try:
         result = client.inventory.create(
-            component=comp,
+            component_pk=by_pk,
+            component_name=by_name if not by_pk else None,
             tag=tag,
             serial_number=serial,
             description=description,
             location_name=location,
             owner_group_name=group,
-            owner_username=owner,
         )
     except Exception as exc:
         print(f"Error creating instance: {exc}", file=sys.stderr)
@@ -418,6 +424,9 @@ def build_parser():
                    help="Project root directory (default: parent of bin/)")
     p.add_argument("--yaml", action="store_true",
                    help="Force YAML output instead of plain text tables")
+    p.add_argument("--user", default=None, metavar="USERNAME",
+                   help="Django username to act as for write operations "
+                        "(required for create-instance)")
 
     sub = p.add_subparsers(dest="command", metavar="COMMAND")
     sub.required = True
@@ -479,9 +488,8 @@ def build_parser():
     sp.add_argument("--location",    metavar="NAME",   default=None,
                     help="Location name (must exist in the database)")
     sp.add_argument("--group",       metavar="GROUP",  default=None,
-                    help="Owner group name (must exist in the database)")
-    sp.add_argument("--owner",       metavar="USER",   default=None,
-                    help="Owner username (must exist in the database)")
+                    help="Owner group name -- must exist, and the acting "
+                         "--user must belong to it (or be staff/superuser)")
     sp.add_argument("--description", metavar="TEXT",   default="",
                     help="Free-text description")
 
