@@ -22,6 +22,7 @@ Commands
   create-instance               Create a new ComponentInstance
   load-template  <FILE>         Load DesignTemplate(s) from a YAML file
   bom-template   <NAME>         Recursive parts explosion for a template
+  delete-template <NAME>        Delete an unlocked DesignTemplate (superuser-only)
 
 Options
 -------
@@ -31,7 +32,9 @@ Options
   --user      Django username to act as for write operations
               (required for create-instance; the created record is always
               owned by this user -- there is no way to set ownership to
-              someone else, by design, see hdb_client/access.py)
+              someone else, by design, see hdb_client/access.py. Also
+              required for delete-template, where the user must be a
+              Django superuser.)
 """
 
 import argparse
@@ -282,6 +285,33 @@ def cmd_bom_template(client, args):
                 _print(row.get("children", []), indent + 1)
         _print(data)
 
+
+
+def cmd_delete_template(client, args):
+    """Delete a DesignTemplate outright -- superuser-only, and only while
+    it's unlocked (no Design has ever been instantiated from it). Mirrors
+    the web UI's "Delete Template" button/policy exactly.
+
+    Requires --user to be a Django superuser; prompts for confirmation
+    unless --yes is given.
+
+    Examples
+    --------
+      bin/hdb --user maxim delete-template "BTOF Stavelet"
+      bin/hdb --user maxim delete-template "BTOF Stavelet" --yes
+    """
+    name = " ".join(args.name)
+    if not args.yes:
+        reply = input(f"Delete design template {name!r}? This cannot be undone. [y/N] ")
+        if reply.strip().lower() not in ("y", "yes"):
+            print("Aborted.")
+            return
+    try:
+        result = client.designs.delete_template(name=name)
+    except Exception as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(1)
+    print(f"Deleted template {result['template']!r}.")
 
 
 def cmd_find(client, args):
@@ -572,6 +602,12 @@ def build_parser():
                         help="Recursive parts explosion for a DesignTemplate")
     sp.add_argument("name", nargs="+", metavar="TEMPLATE_NAME")
 
+    sp = sub.add_parser("delete-template",
+                        help="Delete an unlocked DesignTemplate (superuser-only)")
+    sp.add_argument("name", nargs="+", metavar="TEMPLATE_NAME")
+    sp.add_argument("--yes", action="store_true",
+                    help="Skip the confirmation prompt")
+
     return p
 
 
@@ -592,6 +628,7 @@ COMMANDS = {
     "create-instance": cmd_create_instance,
     "load-template": cmd_load_template,
     "bom-template":  cmd_bom_template,
+    "delete-template": cmd_delete_template,
 }
 
 if __name__ == "__main__":

@@ -1438,6 +1438,10 @@ def template_detail(request, pk):
     # designs yet stays fully editable.
     is_locked = template.designs.exists()
     can_edit  = is_member and not is_locked
+    # Deletion is a stricter, separate permission from editing: any
+    # owner_group member may add/remove placeholders, but only a superuser
+    # may delete the template outright (see template_delete below).
+    can_delete = request.user.is_superuser and not is_locked
 
     form_error = None
     form_data  = {}
@@ -1475,6 +1479,7 @@ def template_detail(request, pk):
     context = {
         'template':     template,
         'can_edit':     can_edit,
+        'can_delete':   can_delete,
         'is_locked':    is_locked,
         'components':   Component.objects.order_by('name'),
         'designs_from': template.designs.select_related('owner_user').order_by('name'),
@@ -1493,14 +1498,15 @@ def template_delete(request, pk):
     design_delete. Only possible while the template is unlocked, i.e. no
     Design has ever been instantiated from it; the button itself is hidden
     once it's locked (see template_detail's is_locked), and this is the
-    authoritative server-side check, not just a hidden control. Members of
-    the template's owner_group (or a superuser) may delete; 403 otherwise."""
+    authoritative server-side check, not just a hidden control.
+
+    Unlike editing a template (open to any owner_group member), deletion is
+    superuser-only -- a deliberate, stricter policy than the usual
+    OwnedModel write rules, since deleting the template removes it for
+    every group member at once, not just the deleter's own view of it.
+    Non-superusers get 403, even if they own the template's group."""
     template = get_object_or_404(DesignTemplate, pk=pk)
-    user_group_ids = set(request.user.groups.values_list('id', flat=True))
-    can_delete = (
-        (bool(template.owner_group_id) and template.owner_group_id in user_group_ids)
-        or request.user.is_superuser
-    )
+    can_delete = request.user.is_superuser
 
     if request.method == 'POST':
         if not can_delete:

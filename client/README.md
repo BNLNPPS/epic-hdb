@@ -349,6 +349,50 @@ an explicit path work, run from anywhere. `--user` is optional here (unlike
 `create-instance`) since this is a curator operation, not a per-request
 write.
 
+#### Deleting a template
+
+A `DesignTemplate` can be deleted outright — in the web UI (the "Delete
+Template" button on its detail page) or via `client.designs.delete_template()`
+/ `hdb.py delete-template` — but only while it's **unlocked**, i.e. no
+`Design` has ever been instantiated from it (`template.designs.exists()`
+is `False`). This is the same immutability rule that freezes a template's
+placeholders once it's been used (see above): a template that already
+backs a real, instantiated design can't be edited *or* deleted, so
+"instantiated from BEMC tower" always means the same bill of placeholders.
+
+Unlike editing (open to any member of the template's `owner_group`, or a
+superuser), **deletion is superuser-only** — a deliberately stricter
+policy, since removing the template removes it for every group member at
+once rather than just changing the deleter's own records. `--user` is
+required and must be a Django superuser; the web UI hides the button
+entirely for non-superusers and 403s a direct POST.
+
+```
+$ python client/hdb.py --user crafts delete-template "BTOF Stavelet"
+Error: User 'crafts' is not a superuser and cannot delete design templates.
+
+$ python client/hdb.py --user maxim delete-template "BEMC tower"
+Delete design template 'BEMC tower'? This cannot be undone. [y/N] y
+Error: Design template 'BEMC tower' is locked -- 1 design(s) have been instantiated from it.
+
+$ python client/hdb.py --user maxim delete-template "BTOF Stavelet" --yes
+Deleted template 'BTOF Stavelet'.
+```
+
+`--yes` skips the interactive confirmation prompt (useful for scripting).
+Deleting a template that's referenced as a "sub-template" by a
+higher-level template (via the name-matching convention above) is fine —
+`template_bom()` simply treats that element as a leaf on its next run,
+the same way it already does for any element whose component name doesn't
+match an existing template.
+
+```python
+client.designs.delete_template(name="BTOF Stavelet")
+# -> {"template": "BTOF Stavelet", "deleted": True}
+# Raises PermissionError if self.user isn't a superuser, or RuntimeError
+# if the template is locked.
+```
+
 ### Access control — `hdb_client/access.py`
 
 - **Read**: unrestricted for any authenticated (or unauthenticated/`user=None`)

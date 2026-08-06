@@ -281,6 +281,36 @@ class DesignClient:
             ))
         return results
 
+    def delete_template(self, name: str | None = None, pk: str | None = None) -> dict:
+        """
+        Delete a DesignTemplate outright -- superuser-only, and only while
+        the template is unlocked (no Design has ever been instantiated
+        from it). Mirrors the web UI's template_delete view/policy exactly:
+        deletion is stricter than editing (any owner_group member may add
+        or remove placeholders on an unlocked template) because removing
+        the template removes it for every group member at once, not just
+        the caller's own view of it.
+
+        Raises PermissionError if self.user isn't a superuser, or
+        RuntimeError if the template is locked (at least one Design has
+        been instantiated from it). Returns {"template": name, "deleted":
+        True} on success.
+        """
+        if self.user is None or not self.user.is_superuser:
+            who = self.user.username if self.user else "<anonymous>"
+            raise PermissionError(
+                f"User {who!r} is not a superuser and cannot delete design templates."
+            )
+        template = self.get_template(name=name, pk=pk)
+        if template.designs.exists():
+            raise RuntimeError(
+                f"Design template {template.name!r} is locked -- "
+                f"{template.designs.count()} design(s) have been instantiated from it."
+            )
+        template_name = template.name
+        template.delete()
+        return {"template": template_name, "deleted": True}
+
     def template_bom(self, template_name: str, _depth: int = 0, _max: int = MAX_BOM_DEPTH) -> list[dict]:
         """
         Recursive parts explosion for a flat DesignTemplate: for each
