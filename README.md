@@ -1,9 +1,9 @@
 # The ePIC Hardware Database
 
 This is a Django implementation of the Hardware Database inspired by *The Component
-Database User Guide* (Argonne National Laboratory / ePIC). The Hardware Database is the
-central repository for documenting, organizing, and tracking components used
-in ePIC.
+Database User Guide* (Argonne National Laboratory). The Hardware Database is the
+candidate central repository for documenting, organizing, and tracking components used
+in ePIC and EIC project.
 
 ---
 
