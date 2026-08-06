@@ -1,17 +1,18 @@
-# The ePIC experiment Component Database
+# The ePIC experiment Hardware Database
 
 ## Inspiration
 This project is a Django-based implementation of the Component Database,
 based on the ideas of the legacy application written in Java, as described
 in the legacy user guide in the file assets/docs/The_Legacy_Component_Database_User_Guide.pdf
 
-## seed_cdb
+## seed_hdb
 
-The seed_cdb command should contain the following entities:
+The seed_hdb command should contain the following entities:
 
 * Groups:
   * BEMC
   * BTOF
+  * PFRICH
 
 * Users:
   * admin - superuser, staff

@@ -236,21 +236,31 @@ client.designs.summary("BEMC tower")
 #    group_writeable, created_on, modified_on, element_count, bom (full BOM tree)
 ```
 
+### Design & Design Template architecture — see the top-level README
+
+`Design`/`DesignElement` and `DesignTemplate`/`DesignTemplateElement` are
+two related but structurally distinct models: `Design` supports real,
+unlimited-depth nesting (`child_design`) and physical instance tracking;
+`DesignTemplate` is deliberately flat (no `child_template` field — every
+placeholder must name a real catalog `Component`), locks once any `Design`
+is instantiated from it, and can only be *deleted* by a superuser while
+still unlocked.
+
+**The full conceptual explanation — the `Design` vs. `DesignTemplate`
+comparison, why templates can't nest and the flat-template-plus-matching-
+`Component`-name workaround (with the worked BTOF Stave → Half-Stave →
+Stavelet example), the instantiation/locking lifecycle, and the
+"deleting an intermediate-level template is safe, not an error" nuance —
+now lives in the top-level [`README.md`, under "Domain 3 —
+Designs"](../README.md#domain-3--designs). That's the single authoritative
+place for it; this file only covers how to *drive* that model through
+`hdb_client`, the CLI, and YAML, below.**
+
 ### Design Templates — loading from YAML
 
-`DesignTemplateElement.component` is a *required* FK to a real catalog
-`Component` — unlike `Design`/`DesignElement`, a `DesignTemplate` has no
-`child_template` field, so one template cannot directly reference another as
-a sub-assembly. To represent a multi-level hierarchy (e.g. a detector built
-from staves, made of half-staves, made of smaller modules) with the schema
-as it stands, model each intermediate assembly level as **both** its own
-catalog `Component` **and** its own `DesignTemplate` of the identical name.
-`template_bom()` follows that name match to recurse — the same way a real
-design's BOM follows `child_design` — so a multi-level template set behaves
-like nested templates without needing a schema change. This also means every
-intermediate assembly (a stavelet, a half-stave, ...) is independently
-serial-trackable as its own `ComponentInstance` once built, which a "pure
-template nesting" design wouldn't give you for free.
+See [the architecture section in the top-level README](../README.md#domain-3--designs)
+for what a `DesignTemplate` is and how multi-level hierarchies work; this
+section covers the mechanics of loading one from a YAML file.
 
 ```python
 client.designs.load_templates_from_yaml("data/btof_stave_templates.yaml")
@@ -356,9 +366,11 @@ Template" button on its detail page) or via `client.designs.delete_template()`
 / `hdb.py delete-template` — but only while it's **unlocked**, i.e. no
 `Design` has ever been instantiated from it (`template.designs.exists()`
 is `False`). This is the same immutability rule that freezes a template's
-placeholders once it's been used (see above): a template that already
-backs a real, instantiated design can't be edited *or* deleted, so
-"instantiated from BEMC tower" always means the same bill of placeholders.
+placeholders once it's been used (see the ["Domain 3 — Designs" section of
+the top-level README](../README.md#domain-3--designs) for the full
+reasoning): a template that already backs a real, instantiated design can't
+be edited *or* deleted, so "instantiated from BEMC tower" always means the
+same bill of placeholders.
 
 Unlike editing (open to any member of the template's `owner_group`, or a
 superuser), **deletion is superuser-only** — a deliberately stricter

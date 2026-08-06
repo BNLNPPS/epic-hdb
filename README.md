@@ -20,27 +20,23 @@ in ePIC.
    - [Cross-Domain: Properties and Logs](#cross-domain-properties-and-logs)
    - [Ownership](#ownership)
 5. [Django Admin](#django-admin)
-6. [Python Client (`cdb_client`)](#python-client-cdb_client)
-   - [LocationClient](#locationclient)
-   - [CatalogClient](#catalogclient)
-   - [InventoryClient](#inventoryclient)
-   - [DesignClient](#designclient)
-   - [CDBClient (combined)](#cdbclient-combined)
-7. [Seed Data](#seed-data)
-8. [Schema Diagram](#schema-diagram)
-9. [Design Decisions](#design-decisions)
+6. [Web UI](#web-ui)
+7. [Python Client, CLI, and MCP Server](#python-client-cli-and-mcp-server)
+8. [Seed Data](#seed-data)
+9. [Schema Diagram](#schema-diagram)
+10. [Design Decisions](#design-decisions)
 
 ---
 
 ## Overview
 
-This Database captures three interrelated domains:
+This database captures three interrelated domains:
 
 | Domain | Purpose |
 |--------|---------|
 | **Component Catalog** | Reference library of every component *type* — custom-fabricated or commercial — with metadata, drawings, vendors, and properties. |
 | **Component Inventory** | Physical instances of catalog items, each with a unique tag, tracked to a specific room, cabinet, or shelf at a specific institution. |
-| **Design Library** | Bill-of-Materials groupings: named assemblies of components and sub-assemblies, with hierarchical nesting and installed-instance tracking. |
+| **Design Library** | Bill-of-Materials groupings: named assemblies of components and sub-assemblies, with hierarchical nesting and installed-instance tracking — plus reusable **Design Templates** for planning an assembly before any of it physically exists. |
 
 A flexible **Properties** system attaches arbitrary typed metadata to any
 domain item. A unified **Log** system records maintenance, inspection, and
@@ -53,48 +49,75 @@ lifecycle events across all domains.
 ```
 epic-hdb/
 ├── manage.py
-├── cdb_project/
+├── hdb_project/                 # Django project (settings, root URLconf)
 │   ├── settings.py
-│   └── urls.py
-├── cdb/
-│   ├── models.py               # All data models
-│   ├── admin.py                # Django admin configuration
+│   ├── urls.py
+│   ├── asgi.py
+│   └── wsgi.py
+├── hdb/                         # The "hdb" Django app — all models, views, admin
+│   ├── models.py                # All data models
+│   ├── admin.py                 # Django admin configuration
+│   ├── views_web.py             # Server-rendered web UI views
+│   ├── urls_web.py              # Web UI URL routes
+│   ├── views.py / serializers.py  # Optional REST API (only if djangorestframework is installed)
 │   ├── migrations/
 │   │   └── 0001_initial.py
-│   └── management/
-│       └── commands/
-│           └── seed_cdb.py     # Sample data loader
-└── client/
-    ├── cdb.py                  # Command-line interface
-    └── cdb_client/             # Programmatic query client (package)
-        ├── client.py           # CDBClient (combined entry point)
-        ├── catalog.py          # CatalogClient
-        ├── inventory.py        # InventoryClient
-        ├── designs.py          # DesignClient
-        └── locations.py        # LocationClient
+│   ├── management/commands/
+│   │   └── seed_hdb.py          # Sample data loader
+│   └── templates/cdb/           # Web UI templates — NOTE: this directory is still
+│                                 # named "cdb" (pre-dating the project's cdb→hdb
+│                                 # rename); the app itself is fully "hdb", only this
+│                                 # template subdirectory's name is a known, pending
+│                                 # cleanup, not a functional issue.
+├── client/                      # hdb_client library, CLI, and MCP server — see client/README.md
+│   ├── hdb.py                   # Command-line interface
+│   ├── mcp_server.py            # MCP server (for AI assistants / MCP clients)
+│   ├── smoke_test.py            # End-to-end test for the MCP server
+│   ├── requirements.txt
+│   ├── README.md                # Full client/CLI/MCP reference — usage mechanics live here
+│   └── hdb_client/              # Programmatic query client (package)
+│       ├── client.py            # HDBClient (combined entry point)
+│       ├── catalog.py           # CatalogClient
+│       ├── inventory.py         # InventoryClient
+│       ├── designs.py           # DesignClient (designs + design templates)
+│       ├── locations.py         # LocationClient
+│       ├── systems.py           # SystemClient
+│       ├── access.py            # Ownership/permission checks shared by all writes
+│       └── serializers.py       # Plain-dict output shaping (no DRF dependency)
+├── data/                        # Sample input files for the client (YAML)
+│   ├── new_sensor.yaml
+│   └── btof_stave_templates.yaml
+└── assets/
+    ├── docs/The_Legacy_Component_Database_User_Guide.pdf   # The original ANL inspiration
+    └── images/                  # Reference photos used by seed_hdb.py
 ```
 
 ---
 
 ## Quick Start
 
-**Requirements:** Python 3.10+, Django 4.x or 5.x.
+**Requirements:** Python 3.10+, Django 4.x or 5.x, plus `qrcode[pil]` (the
+web UI's inventory QR-code page needs it — everything else only needs Django).
 
 ```bash
-pip install django
+pip install django "qrcode[pil]"
 
 # Apply all migrations (creates db.sqlite3):
 python manage.py migrate
 
 # Load sample ePIC detector data:
-python manage.py seed_cdb
+python manage.py seed_hdb
 
 # Start the development server:
 python manage.py runserver
 
-# Open the admin interface:
+# Web UI:
+#   http://127.0.0.1:8000/           (login, then Dashboard)
+# Admin interface:
 #   http://127.0.0.1:8000/admin/
+# Either way, log in as:
 #   Username: admin   Password: admin
+#   (or: maxim / maxim — also a superuser, see Seed Data below)
 ```
 
 To use the Python client from the Django shell, add `client/` to the path first:
@@ -104,8 +127,8 @@ PYTHONPATH=client python manage.py shell
 ```
 
 ```python
-from cdb_client import CDBClient
-client = CDBClient()
+from hdb_client import HDBClient
+client = HDBClient()
 
 # Find where a component is located (pass a UUID primary key)
 client.where_is("5a2c5c0e-479b-4e2f-a7cb-caea37435506")
@@ -114,6 +137,9 @@ client.where_is("5a2c5c0e-479b-4e2f-a7cb-caea37435506")
 client.designs.bom("BEMC tower")
 ```
 
+See [Python Client, CLI, and MCP Server](#python-client-cli-and-mcp-server)
+below for where to go for the complete reference.
+
 ---
 
 ## Data Model
@@ -121,7 +147,7 @@ client.designs.bom("BEMC tower")
 ### Institutions and Locations
 
 **`Institution`** is the top-level geographic anchor, representing a
-collaborating lab or facility (e.g. BNL, CERN, Fermilab). Every location
+collaborating lab or facility (e.g. BNL, CUA, UIC). Every location
 must belong to an institution, enabling inventory tracking across multiple
 sites.
 
@@ -133,17 +159,21 @@ sites.
 | `url` | Homepage |
 
 **`Location`** represents a physical place within an institution, organized
-in a self-referential hierarchy: Building → Room → Cabinet → Shelf.
+in a self-referential hierarchy: Building → Room → Cabinet → Shelf → Other.
 
 | Field | Description |
 |-------|-------------|
 | `name` | Location name |
 | `location_type` | `building`, `room`, `cabinet`, `shelf`, `other` |
-| `institution` | FK to owning Institution |
+| `institution` | FK to owning Institution (required — deleting an Institution with Locations still attached is blocked, not cascaded) |
 | `parent` | FK to parent Location (self-referential) |
 
-`Location.__str__()` returns the full slash-separated path, e.g.:
-`BNL / Building 510 / Room 382`.
+`Location.full_path()` (used by `__str__`) returns the full slash-separated
+path, e.g.: `BNL / Bldg,510A`.
+
+Every `User` also has a **`UserProfile`** with a mandatory `institution` FK —
+a user's home institution, used to group "who's at which site" (e.g. the
+`users_at_institution()` client method).
 
 ---
 
@@ -153,19 +183,24 @@ in a self-referential hierarchy: Building → Room → Cabinet → Shelf.
 
 | Field | Description |
 |-------|-------------|
-| `name` | Unique within a project |
+| `name` | Unique together with `project` |
+| `alternate_name` | Optional secondary name |
 | `model_number` | Vendor or internal model number |
 | `description` | Free-text description |
-| `project` | e.g. `ePIC` |
-| `technical_system` | FK → `TechnicalSystem` (e.g. Tracking, Calorimetry) |
+| `project` | e.g. `ePIC` (default) |
+| `technical_system` | FK → `TechnicalSystem` |
 | `sources` | M2M → `Source` via `ComponentSource` |
-| *(OwnedModel)* | Ownership + timestamps |
+| *(OwnedModel)* | Ownership + timestamps — see [Ownership](#ownership) |
 
-**`TechnicalSystem`** — engineering subsystem (Tracking, Vacuum, Controls, …).
-Acts as a chapter in the catalog.
+**`TechnicalSystem`** — an engineering subsystem (e.g. `BEMC-CRYSTAL`,
+`BTOF-Sensor`). Acts as a chapter in the catalog, and carries its own `group`
+FK (a Django `Group`) identifying the team responsible for it —
+`ComponentInstance` inherits its `technical_system` from its `Component`
+automatically if not set explicitly.
 
 **`Source`** — vendor or manufacturer. The `ComponentSource` through-table
-adds `part_number`, `cost`, and `role` (`vendor` / `manufacturer` / `both`).
+adds `part_number`, `cost`, and `role` (`vendor` / `manufacturer` / `both`)
+per (component, source) pair.
 
 ---
 
@@ -177,41 +212,155 @@ adds `part_number`, `cost`, and `role` (`vendor` / `manufacturer` / `both`).
 |-------|-------------|
 | `tag` | Human-readable label |
 | `serial_number` | Vendor serial number |
-| `component` | FK → `Component` (catalog type) |
+| `component` | FK → `Component` (catalog type) — `PROTECT`ed, so a Component with instances can't be deleted out from under them |
+| `technical_system` | FK → `TechnicalSystem`, auto-inherited from `component` if left unset |
 | `location` | FK → `Location` (where it currently is) |
 | *(OwnedModel)* | Ownership + timestamps |
 
 Each instance inherits all catalog-level properties from its parent
-Component, and may additionally carry its own instance-specific properties
-(e.g. an inspection report, a QA grade, a date put in service).
+`Component`, and may additionally carry its own instance-specific properties
+that override the inherited default for the same `(property_type, tag)` pair
+(`ComponentInstance.effective_properties()` merges the two).
 
 ---
 
 ### Domain 3 — Designs
 
-**`Design`** — a named assembly that fulfils a functional requirement.
-Examples: *ePIC SVT Layer 1 Module*, *ePIC DAQ MicroTCA Crate*.
+This is the most structurally interesting part of the schema, because it's
+actually **two related but distinct models** — mixing up their capabilities
+is the easiest way to be surprised by this part of the database. This
+section is the authoritative explanation; `client/README.md` covers the
+`hdb_client`/CLI *mechanics* for working with both and links back here for
+the *why*.
+
+#### `Design` — a real, buildable assembly
 
 | Field | Description |
 |-------|-------------|
 | `name` | Unique design name |
 | `description` | Functional description |
 | `project` | e.g. `ePIC` |
+| `template` | FK → `DesignTemplate`, nullable — set if this design was instantiated from one |
+| `location` | FK → `Location`, nullable — a design lives in exactly one place; placeholder-filling only offers inventory stored there |
 | *(OwnedModel)* | Ownership + timestamps |
 
 **`DesignElement`** — one slot within a design.
 
 | Field | Description |
 |-------|-------------|
-| `element_name` | Unique name within the design (from naming convention) |
-| `component` | FK → `Component` (leaf element) |
-| `child_design` | FK → `Design` (sub-assembly — enables unlimited nesting) |
-| `installed_instance` | FK → `ComponentInstance` (which physical item occupies this slot) |
-| `quantity` | Number of this element required |
+| `element_name` | Unique within the design |
+| `component` | FK → `Component`, nullable — set for a leaf element |
+| `child_design` | FK → `Design`, nullable — set for a sub-assembly element (**real nesting**, arbitrarily deep) |
+| `quantity` | Number of this element required (applies to either kind) |
 
-Exactly one of `component` or `child_design` is set per element. The
-`installed_instance` field tracks which specific inventory item is currently
-installed at each slot.
+Exactly one of `component` or `child_design` is set per element
+(`element_type()` returns `"COMPONENT"` or `"DESIGN"` based on which).
+
+**`DesignElementInstance`** — a separate join table, *not* a field on
+`DesignElement`: one row per physical `ComponentInstance` installed into one
+slot. A `DesignElement` with `quantity=4` (e.g. "SiPM x 4") can accept up to
+four of these, each pointing at a distinct instance. A `ComponentInstance`
+can be installed in at most one slot anywhere in the whole database at a
+time — enforced by a database-level `unique` constraint on `instance`, not
+just a UI check.
+
+#### `DesignTemplate` — a reusable blueprint
+
+| Field | Description |
+|-------|-------------|
+| `name` | Globally unique |
+| `description` | Free-text |
+| `project` | e.g. `ePIC` |
+| *(OwnedModel)* | Ownership + timestamps |
+
+**`DesignTemplateElement`** — one placeholder line.
+
+| Field | Description |
+|-------|-------------|
+| `element_name` | Unique within the template |
+| `component` | FK → `Component`, **required** — a template placeholder always names a component *type*, never a specific instance |
+| `quantity` | Number needed |
+
+#### The key structural difference: templates can't nest
+
+`DesignElement` can point at another `Design` (`child_design`) — real,
+unlimited-depth nesting is native to the schema. `DesignTemplateElement`
+has **no equivalent `child_template` field**: its `component` FK is required
+and always points at a `Component`, never at another `DesignTemplate`. A
+template can only ever say "this slot needs N of component X" — never "this
+slot needs another sub-template."
+
+| | `Design` | `DesignTemplate` |
+|---|---|---|
+| Represents | A real assembly, instantiated or in progress | A reusable pattern, not a design itself |
+| Element model | `DesignElement` | `DesignTemplateElement` |
+| An element can point at | A `Component` **or** another `Design` | A `Component` **only** |
+| Nests its own kind? | Yes, natively (`child_design`) | No — no schema field for it |
+| Physical tracking | `DesignElementInstance` pins real `ComponentInstance`s into slots | None — always abstract |
+| Locking | None of its own | **Locked** once any `Design` references it as `template` |
+| Who can delete it | Any `owner_group` member, or a superuser | **Superuser only**, and only while unlocked |
+
+**The workaround**, used throughout `data/btof_stave_templates.yaml`: model
+each intermediate assembly level as **both its own catalog `Component` and
+its own `DesignTemplate` of the identical name**. Any BOM-style traversal
+(the web UI's template BOM, or `hdb_client`'s `template_bom()`) can then
+follow that name match to recurse — for each element, it checks whether a
+`DesignTemplate` exists whose `name` equals the element's `component.name`,
+and if so, descends into it. This achieves the same effect as `child_design`
+nesting, through a naming convention instead of a schema field:
+
+```
+DesignTemplate "BTOF Stave"
+  └─ element "Half-Stave Assemblies"  x144  → Component "BTOF Half-Stave"
+       │  (a DesignTemplate of the same name exists, so traversal recurses)
+       └─ DesignTemplate "BTOF Half-Stave"
+            ├─ element "Stavelet Modules"  x8  → Component "BTOF Stavelet"
+            │    └─ DesignTemplate "BTOF Stavelet"
+            │         ├─ "AC-LGAD Sensors"    x4 → Component "AC-LGAD Sensor"        (leaf)
+            │         ├─ "FCFD Readout ASICs" x4 → Component "FCFDv2 Readout"        (leaf)
+            │         ├─ "Interposer Boards"  x4 → Component "BTOF Interposer Board" (leaf)
+            │         └─ "Flex Cable (FPC)"   x1 → Component "BTOF Flex Cable (FPC)" (leaf)
+            ├─ "Peripheral Board"      x1 → Component "BTOF Peripheral Board"       (leaf)
+            └─ "Cooling Pipe Segment"  x1 → Component "BTOF Cooling Pipe Segment"   (leaf)
+```
+
+A component is a "leaf" only because no `DesignTemplate` happens to share its
+name — there's no explicit flag; it's inferred fresh on every traversal.
+This has a real benefit: **every intermediate assembly (a stavelet, a
+half-stave, a stave) is independently serial-trackable as its own
+`ComponentInstance`** once actually built, same as any leaf part — a schema
+that just added a bare `child_template` field wouldn't give you that, since
+an abstract sub-template reference has nothing to attach a serial number to.
+
+#### Instantiation and locking
+
+A `DesignTemplate` starts **unlocked**: any member of its `owner_group` (or
+a superuser) can add, remove, or resize its placeholders. Instantiating it —
+via "New from Template" on the Designs page, or programmatically — creates a
+real `Design` with `template` set, and one `DesignElement` copied from each
+`DesignTemplateElement` at that moment.
+
+The instant **any** `Design` exists with that `template`, the template
+**locks**: every editing and deletion control disappears, checked
+server-side (`template.designs.exists()`), not just hidden in the UI. This
+guarantees "instantiated from BEMC tower" always means the same bill of
+placeholders, no matter when you look. The lock isn't a stored flag, so it's
+automatically reversible — delete the last `Design` built from a template
+and it becomes editable (and deletable) again immediately. `Design` deletion
+itself carries none of these restrictions.
+
+**Deleting a template** is further restricted to **superusers only** (even
+more restrictive than editing, which any `owner_group` member can do) —
+because removing a template removes it for every group member at once. See
+`client/README.md` for the exact CLI/API/web-UI mechanics and real output.
+
+One nuance worth internalizing: deleting an **intermediate-level** template
+in a multi-level set (e.g. "BTOF Stavelet" while "BTOF Half-Stave" and "BTOF
+Stave" still exist) is not an error. The next BOM traversal simply finds no
+matching `DesignTemplate` for that element and treats it as a leaf instead —
+the parent template stays otherwise intact, just one level shallower at that
+branch. Re-loading the original YAML (idempotent) restores the deleted level
+exactly and re-enables the recursion.
 
 ---
 
@@ -225,6 +374,7 @@ item. A single table serves all four targets via optional FK columns.
 | `property_type` | FK → `PropertyType` (predefined, admin-extensible) |
 | `tag` | Optional label for this value |
 | `value` | String value |
+| `file` | Optional uploaded file (for `document`/`image` handler types) |
 | `units` | Optional unit string |
 | `is_dynamic` | True if value varies per instance (e.g. an inspection result) |
 | `component` / `component_instance` / `design` / `design_element` | Target FK — exactly one is set |
@@ -256,283 +406,202 @@ ComponentInstance, or Design.
 | `logged_by` | FK → Django User |
 | `timestamp` | Auto-set on creation |
 
+There's a `/logs/` page (`log_list`) that browses and filters all of them,
+and each Component/Instance/Design detail page shows its own via
+`related_name="log_entries"`. As of this writing there's no "Add Log Entry"
+form anywhere in the web UI — `log_list` is read-only, and a handful of
+actions (e.g. deleting an inventory item) create a `LogEntry` automatically
+as a side effect — so a free-form entry currently has to go through the
+Django admin or direct ORM/client access.
+
 ---
 
 ### Ownership
 
-Every domain model (Component, ComponentInstance, Design) inherits from the
-abstract `OwnedModel`, which supplies:
+Every domain model that can be written to (`Component`, `ComponentInstance`,
+`Design`, `DesignTemplate`) inherits from the abstract `OwnedModel`, which
+supplies:
 
 | Field | Description |
 |-------|-------------|
 | `owner_user` | Individual owner (Django User) |
-| `owner_group` | Owning group (HDB `Group`) |
+| `owner_group` | Owning group (Django `Group`) |
 | `group_writeable` | Whether group members can edit |
 | `created_by` / `created_on` | Creation audit trail |
 | `modified_by` / `modified_on` | Modification audit trail |
 
-**`Group`** — a named team or department (e.g. `DIAG`, `CTL`, `EPIC_TRK`).
+**`Group`** — a named team or subsystem (this repo's seed data uses `BEMC`,
+`BTOF`, and `PFRICH`). A user may write to a row if they're its
+`owner_user`, they're Django staff/superuser, or they're a member of
+`owner_group` *and* `group_writeable` is `True` — see
+`client/hdb_client/access.py` for the exact rule, shared by every write
+path (web UI, client library, CLI, and MCP server alike).
 
 ---
 
 ## Django Admin
 
-The admin interface at `/admin/` provides full CRUD access to all models,
-mirroring the HDB portal's layout:
+The admin interface at `/admin/` provides full CRUD access to every model:
 
 - **Institution** pages include an inline table of all their locations.
 - **Component** pages include inline tables for sources, properties,
-  inventory instances, and log entries.
+  inventory instances, and log entries, plus a computed instance count.
 - **ComponentInstance** pages include inline properties and logs, plus an
   Institution column in the list view for quick site identification.
-- **Design** pages include inline design elements, properties, and logs.
-- **DesignElement** pages include inline element-level properties.
+- **TechnicalSystem** and **Source** have their own simple list/search pages.
+- **DesignTemplate** pages include an inline table of placeholders
+  (`DesignTemplateElement`) and a computed placeholder count.
+- **Design** pages include inline design elements, properties, and logs,
+  plus a computed element count.
+- **DesignElement** pages include inline properties and inline installed
+  instances (`DesignElementInstance`).
+- **User** admin is customized to show institution and group columns, with
+  an inline `UserProfile` (institution) editor.
 - All list views support filtering and search.
 
 ---
 
-## Python Client (`cdb_client`)
+## Web UI
 
-A standalone query client that wraps Django ORM calls behind a clean API.
-All methods return lazy Django QuerySets (chainable) unless documented as
-returning a plain dict or list.
+A server-rendered web UI (separate from `/admin/`) lives at `/`, built from
+`hdb/views_web.py` + `hdb/urls_web.py`. After logging in at `/`, it offers:
 
-### Setup outside the Django shell
+| Page | What it's for |
+|------|----------------|
+| Dashboard | At-a-glance counts across all domains |
+| Components | Catalog browsing/search, add properties, create instances, transfer ownership |
+| Inventory | Instance browsing/search, QR code page, delete (if not installed in a design), transfer ownership, update location/identifiers |
+| Design Templates | Browse, create, edit placeholders, and (superuser) delete unlocked templates |
+| Designs | Browse, "New from Template", assign/unassign installed instances, update location, delete |
+| Systems | Technical systems with component/instance counts |
+| Institutions | Institution list |
+| Users | User list with institution/group info |
+| Logs | Read-only browse/filter over every `LogEntry` |
 
-```python
-import sys, os
-sys.path.insert(0, "/path/to/epic-hdb")          # Django project root
-sys.path.insert(0, "/path/to/epic-hdb/client")   # cdb_client package
-os.environ["DJANGO_SETTINGS_MODULE"] = "cdb_project.settings"
-import django; django.setup()
-
-from cdb_client import CDBClient
-client = CDBClient()
-```
-
----
-
-### LocationClient
-
-```python
-lc = client.locations
-
-# All institutions
-lc.all_institutions()
-
-# Single institution by abbreviation
-lc.get_institution(abbreviation="BNL")
-
-# Institutions in a country
-lc.institutions_by_country("USA")
-
-# All locations at an institution
-lc.locations_at_institution("CERN")
-
-# Buildings only, optionally filtered by institution
-lc.buildings(institution_abbr="BNL")
-
-# Rooms within a named building
-lc.rooms_in_building("Building 510", institution_abbr="BNL")
-
-# Full nested tree as a list of dicts
-lc.location_tree("BNL")
-# Returns: [{"id": 1, "name": "Building 510", "type": "building",
-#            "children": [{"id": 2, "name": "Room 382", ...}]}]
-```
+Every write action goes through the same ownership rule described in
+[Ownership](#ownership) above — group membership, `owner_user`, or
+staff/superuser status — enforced server-side on every POST, not just by
+hiding buttons in the template.
 
 ---
 
-### CatalogClient
+## Python Client, CLI, and MCP Server
+
+`client/` holds three thin, interchangeable ways to talk to HDB
+programmatically, all built on the same `hdb_client` query/write layer:
+
+| Layer | File(s) | Use it when… |
+|---|---|---|
+| Python library | `client/hdb_client/` | Writing a script or Django-adjacent tool; direct ORM-speed access, in-process |
+| CLI | `client/hdb.py` | Querying/updating from a terminal or shell script |
+| MCP server | `client/mcp_server.py` | Letting an AI assistant or other MCP client query/update HDB over HTTP |
+
+A minimal example (see [Quick Start](#quick-start) above for the full
+bootstrap needed outside `manage.py shell`):
 
 ```python
-cc = client.catalog
+from hdb_client import HDBClient
+client = HDBClient()                    # or HDBClient(user=some_django_user) for writes
 
-# Full-text search (name, alternate name, model number, description)
-cc.search("silicon strip")
-
-# Filter by technical system or project
-cc.by_technical_system("BTOF-Sensor")
-cc.by_project("ePIC")
-
-# Look up a single component
-cc.get(name="PbWO4 Crystal")
-cc.get(model_number="PWO-BEMC-01")
-
-# Count physical instances of a component type
-cc.instance_count("PbWO4 Crystal")  # → int
-
-# Full plain-dict summary
-cc.summary("PbWO4 Crystal")
-# Returns: {"id": ..., "name": ..., "sources": [...], "properties": [...], ...}
+client.search_all("Crystal")
+client.where_is(instance_pk)
+client.designs.bom("BEMC tower")
+client.designs.template_bom("BTOF Stave")   # see Domain 3 above for what this recurses through
 ```
 
----
+`HDBClient` aggregates six sub-clients (`locations`, `systems`, `catalog`,
+`inventory`, `designs`) plus the two cross-domain helpers shown above.
 
-### InventoryClient
-
-```python
-ic = client.inventory
-
-# Look up a single instance by its primary key (UUID)
-ic.get(pk="5a2c5c0e-479b-4e2f-a7cb-caea37435506")
-
-# All instances of a component type
-ic.instances_of("ePIC SVT Silicon Strip Sensor")
-
-# Filter by institution or location
-ic.at_institution("CERN")
-ic.at_location("Room 382", institution_abbr="BNL")
-
-# Filter by owner group
-ic.by_group("EPIC_TRK")
-
-# Full-text search
-ic.search("SVT-Sensor")
-
-# Which instances are installed in a design's slots?
-ic.installed_in_design("ePIC SVT Layer 1 Module")
-
-# Instance count grouped by institution (plain list of dicts)
-ic.institution_summary()
-# Returns: [{"institution": "BNL", "count": 7}, {"institution": "FNAL", "count": 1}]
-
-# Full plain-dict detail for a single instance
-ic.detail("5a2c5c0e-479b-4e2f-a7cb-caea37435506")
-# Returns: {"id": ..., "tag": ..., "location": ..., "institution": ..., "properties": [...], "logs": [...]}
-```
-
----
-
-### DesignClient
-
-```python
-dc = client.designs
-
-# All designs, or filtered by project
-dc.all_designs()
-dc.by_project("ePIC")
-
-# Full-text search
-dc.search("tracking")
-
-# Elements of a design
-dc.elements_of("ePIC SVT Layer 1 Module")  # → QuerySet[DesignElement]
-
-# Recursive Bill of Materials (nested list of dicts)
-dc.bom("ePIC Tracking System")
-# Returns:
-# [{"element": "TRK-SVT-L1-MOD-01", "type": "DESIGN",
-#   "ref": "ePIC SVT Layer 1 Module", "qty": 1,
-#   "children": [
-#     {"element": "SVT-L1-SEN-A", "type": "COMPONENT",
-#      "ref": "ePIC SVT Silicon Strip Sensor",
-#      "model_number": "HPK-SVT-01",
-#      "installed_id": "5a2c5c0e-479b-4e2f-a7cb-caea37435506", "children": []},
-#     ...
-#   ]}, ...]
-
-# Flat list of leaf components only (no sub-design rows)
-dc.flat_component_list("ePIC SVT Layer 1 Module")
-
-# Which designs directly contain a given component?
-dc.designs_using_component("ePIC SVT Silicon Strip Sensor")
-
-# Full plain-dict summary including BOM
-dc.summary("ePIC DAQ MicroTCA Crate")
-```
-
----
-
-### CDBClient (combined)
-
-```python
-client = CDBClient()
-
-# Search components, instances, and designs in one call
-client.search_all("strip")
-# Returns: {"components": [...], "instances": [...], "designs": [...]}
-
-# Where is this item right now?
-client.where_is("5a2c5c0e-479b-4e2f-a7cb-caea37435506")
-# Returns: {"id": ..., "component": "ePIC SVT Silicon Strip Sensor",
-#           "technical_system": "Tracking",
-#           "location": "BNL / Building 510 / Room 382",
-#           "institution": "BNL", "city": "Upton", "country": "USA",
-#           "owner_user": "tester", "owner_group": "EPIC_TRK"}
-
-# Sub-clients
-client.locations   # LocationClient
-client.systems     # SystemClient
-client.catalog     # CatalogClient
-client.inventory   # InventoryClient
-client.designs     # DesignClient
-```
+**For the complete method-by-method reference, the CLI command list
+(including `load-template`/`bom-template`/`delete-template` for working
+with Design Templates), the YAML formats, and MCP server setup/auth/tools —
+see [`client/README.md`](client/README.md).** That document is the
+authoritative usage reference for all three layers; this section is
+intentionally just an orientation, kept short so it can't drift out of sync
+with the client code the way a duplicated method list would.
 
 ---
 
 ## Seed Data
 
-`python manage.py seed_cdb` loads a realistic ePIC detector dataset:
+`python manage.py seed_hdb` loads a realistic ePIC detector dataset
+(verified against the current schema — counts below are exact, not
+approximate):
 
 | Object | Count | Examples |
 |--------|-------|---------|
-| Institutions | 4 | BNL, CUA, UIC, UH |
-| Locations | 3 | Storage Room (CUA), Test Lab (UIC), Bldg.510A (BNL) |
-| Groups | 2 | BEMC, BTOF |
+| Institutions | 4 | BNL, CUA, UIC, UH (University of Hawaii) |
+| Locations | 3 | Storage Room (CUA), Test Lab (UIC), Bldg,510A (BNL) |
+| Groups | 3 | BEMC, BTOF, PFRICH |
+| Users | 8 | `admin`, `maxim` (superusers); `crafts` (BEMC), `gnigmat` (BTOF), `ottjenni` (BTOF), `ullrich` (BEMC+BTOF), `bpage` (PFRICH), `ayk` (PFRICH) |
+| Technical Systems | 4 | BEMC-CRYSTAL, BEMC-PM, BTOF-Sensor, BTOF-Readout |
 | Components | 4 | PbWO4 Crystal, Hamamatsu S14160-3010PS, AC-LGAD Sensor, FCFDv2 Readout |
-| Instances | 14 | 3 crystals, 4 SiPMs, 2 AC-LGAD sensors, 5 FCFDv2 readout ASICs |
-| Designs | 1 | BEMC tower (1 crystal + 4 SiPMs) |
+| Instances | 26 | 3 crystals, 16 SiPMs, 2 AC-LGAD sensors, 5 FCFDv2 readout ASICs |
+| Design Templates | 1 | BEMC tower (blueprint: 1 crystal + 4 SiPMs) |
+| Designs | 1 | BEMC tower (instantiated from its own template) |
 | Property Types | 7 | Weight, Datasheet, Timing Constant, Length, Width, Height, Image |
 | Sources | 0 | — |
 
-The seed command is idempotent — running it multiple times will not create
-duplicate records.
+Every account's initial password matches its username (e.g. `crafts`/`crafts`),
+set only the first time each account is created. The command is
+**idempotent** — safe to run repeatedly, never duplicates or clobbers
+existing records (`get_or_create()` throughout).
 
-Default superuser: **admin / admin**.
+Separately, `data/btof_stave_templates.yaml` provides a much larger,
+multi-level Design Template set (the ePIC BTOF Stave → Half-Stave →
+Stavelet hierarchy) — it's **not** loaded by `seed_hdb`, but by
+`client/hdb.py load-template`. See
+[Python Client, CLI, and MCP Server](#python-client-cli-and-mcp-server)
+above and `client/README.md` for how.
 
 ---
 
 ## Schema Diagram
 
 ```
-Institution
-    │
-    └─► Location (building → room → cabinet → shelf, self-FK)
-              │
-              └─► ComponentInstance ──────────────────┐
-                       │                              │
-                       │  FK: component               │  FK: installed_instance
-                       ▼                              ▼
-Group ──────► Component                         DesignElement ◄──── Design
-                  │                                  │
-                  ├─► ComponentSource ──► Source     └─► child_design (FK: Design)
-                  │
-                  ├─► PropertyValue   (FK: component)
-                  ├─► PropertyValue   (FK: component_instance)
-                  ├─► PropertyValue   (FK: design)
-                  └─► PropertyValue   (FK: design_element)
+Institution ──► Location (self-FK: building → room → cabinet → shelf)
+                    │
+                    └──────────────────────────────────────┐
+                                                             ▼
+Group ──► TechnicalSystem ──► Component ──► ComponentInstance
+                                   │                │
+                                   ├─► ComponentSource ──► Source
+                                   │
+                                   ├─► PropertyValue  (FK: component)
+                                   ├─► PropertyValue  (FK: component_instance)
+                                   ├─► LogEntry        (FK: component)
+                                   └─► LogEntry        (FK: component_instance)
 
-LogEntry  (optional FK to Component / ComponentInstance / Design)
+DesignTemplate ──► DesignTemplateElement ──► Component
+      │   (flat only — no template-to-template nesting; see Domain 3)
+      │
+      │   instantiate
+      ▼
+    Design ──► DesignElement ──┬─► Component                 (leaf)
+      │             │          └─► Design (child_design)      (real nesting)
+      │             │
+      │             └─► DesignElementInstance ──► ComponentInstance
+      │
+      ├─► PropertyValue  (FK: design)          ├─► PropertyValue  (FK: design_element)
+      └─► LogEntry        (FK: design)
 
-TechnicalSystem ──► Component
-PropertyType ──► PropertyValue
+UserProfile ──► User, Institution
 ```
 
 ---
 
 ## Design Decisions
 
-**`OwnedModel` abstract base** — every domain model inherits a consistent
-set of ownership (`owner_user`, `owner_group`, `group_writeable`) and audit
-fields (`created_by/on`, `modified_by/on`), matching the CDB User Guide's
-ownership model.
+**`OwnedModel` abstract base** — every writable domain model inherits a
+consistent set of ownership (`owner_user`, `owner_group`, `group_writeable`)
+and audit fields (`created_by/on`, `modified_by/on`), matching the CDB User
+Guide's ownership model.
 
 **`Institution` as a first-class model** — rather than a free-text field or
 a special location type, `Institution` is its own model with country, city,
 and URL. Every `Location` has a mandatory FK to an `Institution`, enabling
-`SELECT … WHERE location__institution__abbreviation = 'CERN'` style queries
-across the whole inventory.
+`location__institution__abbreviation=...`-style queries across the whole
+inventory.
 
 **Single `PropertyValue` table** — four nullable FK columns (`component`,
 `component_instance`, `design`, `design_element`) let one table serve all
@@ -541,15 +610,31 @@ any object can carry any property.
 
 **`DesignElement` dual-target pattern** — each element sets either
 `component` (leaf) or `child_design` (sub-assembly), never both. This
-enables unlimited BOM nesting depth and is the mechanism by which a "full
-tracking system" design can reference "SVT Layer 1 Module" sub-designs,
-which in turn reference individual sensor and ASIC components.
+enables unlimited BOM nesting depth for real `Design`s.
 
-**QuerySet-returning client methods** — `CatalogClient`, `InventoryClient`,
-and `DesignClient` return lazy Django QuerySets wherever possible. Callers
-can chain additional filters, annotations, or `values()` calls without
-re-querying the database. Methods that return dicts or lists are explicitly
-documented as such.
+**Deliberately flat `DesignTemplate`s, with a naming-convention workaround
+for multi-level hierarchies** — rather than adding a `child_template` field
+to mirror `child_design`, a template placeholder can only reference a
+catalog `Component`. Multi-level template hierarchies are represented by
+giving each intermediate assembly level both its own `Component` and its
+own identically-named `DesignTemplate` — see [Domain 3](#domain-3--designs)
+for the full reasoning, including why this also makes every intermediate
+assembly independently serial-trackable, which a schema-level
+`child_template` field wouldn't.
+
+**Superuser-only template deletion** — editing an unlocked `DesignTemplate`
+is open to any `owner_group` member (matching every other write in the
+system), but *deleting* one is superuser-only. Removing a template removes
+it for every group member at once, not just the deleter's own records — a
+deliberately stricter bar than the usual ownership rule.
+
+**QuerySet-returning client methods** — `hdb_client`'s domain clients return
+lazy Django QuerySets wherever possible. Callers can chain additional
+filters, annotations, or `values()` calls without re-querying the database.
+Methods that return dicts or lists (for JSON-safe API/MCP output) are
+explicitly documented as such in `client/README.md`.
+
+---
 
 ## Note for testers/developers
 
@@ -557,21 +642,8 @@ To completely reset the database, use these commands:
 ```bash
 # from your project root (where manage.py lives)
 rm -f db.sqlite3
-rm -rf cdb/migrations
-python manage.py makemigrations cdb
+rm -rf hdb/migrations
+python manage.py makemigrations hdb
 python manage.py migrate
-python manage.py seed_cdb
+python manage.py seed_hdb
 ```
-
-## Logging 
-
-Log entries are stored in a single LogEntry table, same table regardless of what the entry is attached to.
-Each row has a topic (General/Installation/Inventory/Design/Maintenance/Inspection/Repair/Decommission/Other), free-text entry,
-an optional attachment file (log_attachments/ under MEDIA_ROOT), who logged it, and a timestamp — and it links
-to exactly one of component, component_instance, or design via nullable foreign keys, all CASCADE, so deleting
-a Component/Instance/Design deletes its logs too.
-
-There's a /logs/ page (log_list) that browses and filters all of them, and each Component/Instance/Design detai
-page shows its own logs via the reverse related_name="log_entries". One thing worth knowing: like Designs,
-there's currently no "Add Log Entry" form anywhere in the web UI — log_list is read-only,
-so the only way to create one right now is the Django admin or direct ORM/API access.

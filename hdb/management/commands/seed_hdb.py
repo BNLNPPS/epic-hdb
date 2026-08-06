@@ -39,7 +39,7 @@ class Command(BaseCommand):
 
         # Groups
         grp = {}
-        for n in ["BEMC", "BTOF"]:
+        for n in ["BEMC", "BTOF", "PFRICH"]:
             g, _ = Group.objects.get_or_create(name=n)
             grp[n] = g
 
@@ -84,6 +84,16 @@ class Command(BaseCommand):
         ullrich = mkuser("ullrich", groups=["BEMC", "BTOF"],
                           first_name="Thomas", last_name="Ullrich",
                           email="thomas.ullrich@bnl.gov")
+        # PFRICH: pfRICH (proximity-focusing RICH) detector developers,
+        # both BNL -- confirmed via public ePIC/pfRICH meeting agendas and
+        # talks on indico.bnl.gov (pfRICH kick-off meeting, general
+        # meetings, CDR, and DAC status updates).
+        bpage = mkuser("bpage", groups=["PFRICH"],
+                        first_name="Brian", last_name="Page",
+                        email="bpage@bnl.gov")
+        ayk = mkuser("ayk", groups=["PFRICH"],
+                      first_name="Alexander", last_name="Kiselev",
+                      email="ayk@bnl.gov")
 
         # Technical systems, each owned by a responsible group
         ts = {}
@@ -131,7 +141,8 @@ class Command(BaseCommand):
         )
 
         # Link each user to their home institution.
-        for user, inst in [(crafts, cua), (gnigmat, uic), (ullrich, bnl), (maxim, bnl), (ottjenni, hawaii)]:
+        for user, inst in [(crafts, cua), (gnigmat, uic), (ullrich, bnl), (maxim, bnl), (ottjenni, hawaii),
+                           (bpage, bnl), (ayk, bnl)]:
             UserProfile.objects.get_or_create(user=user, defaults={"institution": inst})
 
         # Components  (Component has no "function" field -- the functional
@@ -398,7 +409,7 @@ class Command(BaseCommand):
 
         self.stdout.write(self.style.SUCCESS(
             f"\nDone.  admin/admin, maxim/maxim | "
-            f"Groups:{Group.objects.filter(name__in=['BEMC','BTOF']).count()}  "
+            f"Groups:{Group.objects.filter(name__in=['BEMC','BTOF','PFRICH']).count()}  "
             f"Systems:{TechnicalSystem.objects.count()}  "
             f"Components:{Component.objects.count()}  "
             f"Instances:{ComponentInstance.objects.count()}  "
