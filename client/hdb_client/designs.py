@@ -127,6 +127,17 @@ class DesignClient:
             `technical_system` (and that system's `group`) too if given
             and not already present.
 
+        A newly-created Component's `owner_group` is set to its
+        `technical_system`'s `group` (read from the TechnicalSystem row
+        itself, not just this spec's own `technical_system_group` key) --
+        so every component sharing a `technical_system` inherits the same
+        owner_group even if only the first spec that creates that
+        TechnicalSystem actually specifies `technical_system_group` (the
+        common case in a multi-element YAML file: repeating the group on
+        every element referencing the same technical_system would be
+        redundant). A component with no `technical_system` gets no
+        owner_group either -- there's nothing to inherit from.
+
         Returns (component, created).
         """
         m = _m()
@@ -154,6 +165,7 @@ class DesignClient:
                 "model_number": spec.get("model_number", ""),
                 "description": spec.get("description", ""),
                 "technical_system": technical_system,
+                "owner_group": technical_system.group if technical_system else None,
             },
         )
         return component, created

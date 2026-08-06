@@ -1,9 +1,13 @@
+{% load static %}
 <!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>{% block title %}ePIC Hardware{% endblock %}</title>
+<link rel="icon" type="image/svg+xml" href="{% static 'hdb/favicon.svg' %}">
+<link rel="icon" type="image/x-icon" href="{% static 'hdb/favicon.ico' %}">
+<link rel="apple-touch-icon" href="{% static 'hdb/apple-touch-icon.png' %}">
 <style>
   :root {
     --nav-width: 220px;

@@ -534,7 +534,7 @@ approximate):
 | Locations | 3 | Storage Room (CUA), Test Lab (UIC), Bldg,510A (BNL) |
 | Groups | 3 | BEMC, BTOF, PFRICH |
 | Users | 8 | `admin`, `maxim` (superusers); `crafts` (BEMC), `gnigmat` (BTOF), `ottjenni` (BTOF), `ullrich` (BEMC+BTOF), `bpage` (PFRICH), `ayk` (PFRICH) |
-| Technical Systems | 4 | BEMC-CRYSTAL, BEMC-PM, BTOF-Sensor, BTOF-Readout |
+| Technical Systems | 5 | BEMC-CRYSTAL, BEMC-PM, BTOF-Sensor, BTOF-Readout, PFRICH-HRPPD |
 | Components | 4 | PbWO4 Crystal, Hamamatsu S14160-3010PS, AC-LGAD Sensor, FCFDv2 Readout |
 | Instances | 26 | 3 crystals, 16 SiPMs, 2 AC-LGAD sensors, 5 FCFDv2 readout ASICs |
 | Design Templates | 1 | BEMC tower (blueprint: 1 crystal + 4 SiPMs) |

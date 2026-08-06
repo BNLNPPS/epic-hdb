@@ -98,10 +98,11 @@ class Command(BaseCommand):
         # Technical systems, each owned by a responsible group
         ts = {}
         for n, group_name in [
-            ("BEMC-CRYSTAL", "BEMC"),
-            ("BEMC-PM",      "BEMC"),
-            ("BTOF-Sensor",  "BTOF"),
-            ("BTOF-Readout", "BTOF"),
+            ("BEMC-CRYSTAL",  "BEMC"),
+            ("BEMC-PM",       "BEMC"),
+            ("BTOF-Sensor",   "BTOF"),
+            ("BTOF-Readout",  "BTOF"),
+            ("PFRICH-HRPPD",  "PFRICH"),
         ]:
             o, _ = TechnicalSystem.objects.get_or_create(
                 name=n, defaults={"group": grp[group_name]}
