@@ -1388,13 +1388,16 @@ def template_list(request):
             )
             return redirect('template-detail', pk=template.pk)
 
-    q  = request.GET.get('q', '')
+    q     = request.GET.get('q', '')
+    group = request.GET.get('group', '')
     qs = DesignTemplate.objects.select_related('owner_group', 'owner_user').annotate(
         placeholder_count=Count('elements', distinct=True),
         design_count=Count('designs', distinct=True),
     ).order_by('name')
     if q:
         qs = qs.filter(Q(name__icontains=q) | Q(description__icontains=q))
+    if group:
+        qs = qs.filter(owner_group__name=group)
 
     paginator = Paginator(qs, PAGE_SIZE)
     page_obj  = paginator.get_page(request.GET.get('page'))
@@ -1402,8 +1405,15 @@ def template_list(request):
     context = {
         'page_obj':     page_obj,
         'q':            q,
+        'group':        group,
         'query_str':    _qs(request),
         'groups':       creatable_groups,
+        # All groups, for the filter dropdown -- deliberately separate from
+        # `groups` above (the "New Template" modal's *creatable* groups,
+        # restricted to the acting user's own memberships). Filtering the
+        # list is a read, which is unrestricted, so every group is offered
+        # here regardless of who's logged in.
+        'all_groups':   Group.objects.order_by('name'),
         'form_error':   form_error,
         'form_data':    form_data,
         'open_modal':   bool(form_error),
@@ -1622,12 +1632,24 @@ def _build_bom(design, depth=0, max_depth=10):
 
 @login_required
 def system_list(request):
-    """List all technical systems with component and instance counts."""
+    """List all technical systems with component and instance counts.
+    Optionally filtered down to one responsible group via ?group=<name>,
+    same pattern as the Components/Inventory/Users list pages."""
+    group = request.GET.get('group', '')
+
     systems = TechnicalSystem.objects.select_related('group').annotate(
         component_count=Count('components', distinct=True),
         instance_count=Count('components__instances', distinct=True),
     ).order_by('name')
-    context = {'systems': systems, 'active_page': 'systems'}
+    if group:
+        systems = systems.filter(group__name=group)
+
+    context = {
+        'systems':     systems,
+        'groups':      Group.objects.order_by('name'),
+        'group':       group,
+        'active_page': 'systems',
+    }
     return render(request, 'cdb/systems.html', context)
 
 

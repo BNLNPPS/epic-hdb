@@ -45,8 +45,14 @@ dialog.modal::backdrop { background: rgba(20,23,34,.45); }
     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
     <input type="text" name="q" value="{{ q }}" placeholder="Search templates…">
   </div>
+  <select name="group" class="filter-select">
+    <option value="">All Groups</option>
+    {% for grp in all_groups %}
+      <option value="{{ grp.name }}" {% if group == grp.name %}selected{% endif %}>{{ grp.name }}</option>
+    {% endfor %}
+  </select>
   <button type="submit" class="btn btn-primary">Search</button>
-  {% if q %}<a href="{% url 'template-list' %}" class="btn btn-ghost">Clear</a>{% endif %}
+  {% if q or group %}<a href="{% url 'template-list' %}" class="btn btn-ghost">Clear</a>{% endif %}
 </form>
 
 <div class="table-wrap">
@@ -72,7 +78,7 @@ dialog.modal::backdrop { background: rgba(20,23,34,.45); }
         <td style="color:var(--muted);font-size:12.5px">{{ tpl.description|truncatechars:60 }}</td>
       </tr>
       {% empty %}
-      <tr><td colspan="6"><div class="empty">No templates found{% if q %} for "{{ q }}"{% endif %}</div></td></tr>
+      <tr><td colspan="6"><div class="empty">No templates found{% if q %} for "{{ q }}"{% endif %}{% if group %} in group "{{ group }}"{% endif %}</div></td></tr>
       {% endfor %}
     </tbody>
   </table>
