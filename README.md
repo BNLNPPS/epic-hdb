@@ -198,6 +198,17 @@ FK (a Django `Group`) identifying the team responsible for it —
 `ComponentInstance` inherits its `technical_system` from its `Component`
 automatically if not set explicitly.
 
+`TechnicalSystem.name` and `Group.name` are independent, unrelated strings —
+there's no naming convention or code that ties them together, and nothing
+requires a `TechnicalSystem` to be named after its `group` (or vice versa).
+This repo's seed data just happens to *look* related because it follows an
+informal `<GROUP>-<ROLE>` convention (`BEMC-CRYSTAL`/`BEMC-PM` → group
+`BEMC`; `BTOF-Sensor`/`BTOF-Readout` → group `BTOF`; `PFRICH-HRPPD` → group
+`PFRICH`) purely for human readability. The actual link between the two
+models is only the one nullable FK, `TechnicalSystem.group`, set once at
+creation — see [Domain 1](#domain-1--component-catalog) above and the
+Django-admin note below for how that field is (and isn't) kept in sync.
+
 **`Source`** — vendor or manufacturer. The `ComponentSource` through-table
 adds `part_number`, `cost`, and `role` (`vendor` / `manufacturer` / `both`)
 per (component, source) pair.
@@ -449,6 +460,9 @@ The admin interface at `/admin/` provides full CRUD access to every model:
 - **ComponentInstance** pages include inline properties and logs, plus an
   Institution column in the list view for quick site identification.
 - **TechnicalSystem** and **Source** have their own simple list/search pages.
+  A `TechnicalSystem`'s `group` field is a plain dropdown of existing
+  `Group`s (no free-text entry), but the "+" icon next to it opens a popup
+  to create a new `Group` on the spot without leaving the page.
 - **DesignTemplate** pages include an inline table of placeholders
   (`DesignTemplateElement`) and a computed placeholder count.
 - **Design** pages include inline design elements, properties, and logs,
