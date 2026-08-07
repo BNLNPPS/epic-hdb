@@ -1,0 +1,6 @@
+by_name: "PbWO4 Crystal"        # or: by_pk: "<uuid>"
+tag: BEMC-CRYSTAL-099
+serial: "PWO-0099"
+location: "Storage Room"
+group: BEMC
+description: "New delivery, batch 12, visual inspection passed"

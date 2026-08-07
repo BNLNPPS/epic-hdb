@@ -1,7 +1,0 @@
-by_name: "ePIC SVT Silicon Strip Sensor"   # or: by_pk: "a1b2c3d4-..."
-tag: SVT-SN-043
-serial: "20240315-007"
-location: "Room 382"
-group: SVT
-owner: admin
-description: "Batch 7, received 2024-03-15, visual inspection passed"

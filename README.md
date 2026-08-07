@@ -85,7 +85,7 @@ epic-hdb/
 │       ├── access.py            # Ownership/permission checks shared by all writes
 │       └── serializers.py       # Plain-dict output shaping (no DRF dependency)
 ├── data/                        # Sample input files for the client (YAML)
-│   ├── new_sensor.yaml
+│   ├── new_crystal.yaml
 │   └── btof_stave_templates.yaml
 └── assets/
     ├── docs/The_Legacy_Component_Database_User_Guide.pdf   # The original ANL inspiration
