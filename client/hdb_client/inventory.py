@@ -105,6 +105,11 @@ class InventoryClient:
           - owner_group must be a Group self.user actually belongs to
             (or None), enforced by access.resolve_owner_group_for_create
         Anonymous callers (self.user is None) are rejected outright.
+
+        location_name is required -- a physical inventory item always has a
+        location, even if that's "at the manufacturer" or a shipping/transit
+        location before it's arrived anywhere. Create that Location first
+        (or use an existing one) rather than omitting it.
         """
         if self.user is None:
             raise PermissionError("Authentication required to create inventory records.")
@@ -121,12 +126,15 @@ class InventoryClient:
         except m.Component.DoesNotExist:
             raise ValueError(f"Component not found: {component_pk or component_name!r}")
 
-        location = None
-        if location_name:
-            try:
-                location = m.Location.objects.get(name=location_name)
-            except m.Location.DoesNotExist:
-                raise ValueError(f"Location not found: {location_name!r}")
+        if not location_name:
+            raise ValueError(
+                "A location is required to create an inventory instance "
+                "(e.g. the manufacturer, or a shipping/transit location)."
+            )
+        try:
+            location = m.Location.objects.get(name=location_name)
+        except m.Location.DoesNotExist:
+            raise ValueError(f"Location not found: {location_name!r}")
 
         owner_group = access.resolve_owner_group_for_create(owner_group_name, self.user)
 

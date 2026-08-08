@@ -4,6 +4,7 @@ URL config: hdb/urls_web.py
 """
 import io
 from itertools import groupby
+from urllib.parse import urlencode
 
 from django.shortcuts import render, get_object_or_404, redirect
 from django.urls import reverse
@@ -227,15 +228,36 @@ def component_detail(request, pk):
          if inst.location and inst.location.institution},
         key=str,
     )
-    can_add_instance = bool(comp.owner_group_id) and comp.owner_group_id in user_group_ids
+    can_add_instance = (
+        (bool(comp.owner_group_id) and comp.owner_group_id in user_group_ids)
+        or request.user.is_superuser
+    )
+
+    # Populated only when component_instance_create redirects back here
+    # after rejecting a POST with no Location (see that view for why
+    # Location is required). Query-string round trip, since that view
+    # redirects rather than rendering this template itself.
+    instance_error = request.GET.get('instance_error')
+    instance_form_data = {
+        'tag':           request.GET.get('itag', ''),
+        'serial_number': request.GET.get('iserial', ''),
+    }
 
     # Same group-membership check gates the "Current Owner" transfer
     # control -- only members of the component's owner_group may reassign
-    # ownership, and the dropdown only ever lists that group's members.
+    # ownership, and the dropdown lists that group's members plus every
+    # superuser -- superusers can own (or be assigned) a component outside
+    # their own groups, so they must always be valid transfer targets, not
+    # just valid initiators. The current owner is included even if they fit
+    # neither bucket (e.g. removed from the group since), so the dropdown
+    # never silently shows blank for a real, already-set owner.
     can_transfer_owner = can_add_instance or request.user.is_superuser
-    group_members = (
-        comp.owner_group.user_set.order_by('username') if comp.owner_group_id else User.objects.none()
-    )
+    owner_choices_q = Q(is_superuser=True)
+    if comp.owner_group_id:
+        owner_choices_q |= Q(groups=comp.owner_group_id)
+    if comp.owner_user_id:
+        owner_choices_q |= Q(pk=comp.owner_user_id)
+    group_members = User.objects.filter(owner_choices_q).distinct().order_by('username')
 
     # Group the Properties panel by units of measurement (e.g. every "g"
     # property together, every "mm" property together), so related physical
@@ -268,6 +290,9 @@ def component_detail(request, pk):
         'form_error':      form_error,
         'form_data':       form_data,
         'open_modal':      bool(form_error),
+        'instance_error':      instance_error,
+        'instance_form_data':  instance_form_data,
+        'open_instance_modal': bool(instance_error),
     }
     return render(request, 'cdb/component_detail.html', context)
 
@@ -332,15 +357,26 @@ def component_instance_create(request, pk):
     """Create a new ComponentInstance for this component from the "+ Add
     Instance" button on the component detail page, and send the user
     straight to the new instance's page. Only members of the component's
-    owner_group may do this. The button is hidden from everyone else, but
-    this is the authoritative, server-side check -- a POST here from
-    anyone else (or against a component with no owner_group at all to
-    check membership against) is rejected with 403 rather than silently
-    creating an instance owned by a group the requester doesn't belong
-    to."""
+    owner_group -- or a superuser, same exception as can_edit_properties
+    and can_transfer_owner elsewhere in this file -- may do this. The
+    button is hidden from everyone else, but this is the authoritative,
+    server-side check -- a POST here from anyone else (or against a
+    component with no owner_group at all to check membership against, from
+    a non-superuser) is rejected with 403 rather than silently creating an
+    instance owned by a group the requester doesn't belong to.
+
+    A physical inventory item always has a location -- even "at the
+    manufacturer" or "in transit" is a location -- so Location is required.
+    A POST missing it doesn't create anything; it bounces back to the
+    component detail page with the modal reopened, the error shown, and the
+    tag/serial the user had already typed preserved (via query string,
+    since this view redirects rather than rendering the page itself)."""
     comp = get_object_or_404(Component, pk=pk)
     user_group_ids = set(request.user.groups.values_list('id', flat=True))
-    can_add = bool(comp.owner_group_id) and comp.owner_group_id in user_group_ids
+    can_add = (
+        (bool(comp.owner_group_id) and comp.owner_group_id in user_group_ids)
+        or request.user.is_superuser
+    )
 
     if request.method == 'POST':
         if not can_add:
@@ -348,6 +384,15 @@ def component_instance_create(request, pk):
         tag           = request.POST.get('tag', '').strip()
         serial_number = request.POST.get('serial_number', '').strip()
         location_id   = request.POST.get('location') or None
+
+        if not location_id:
+            params = urlencode({
+                'instance_error': 'Please choose a location.',
+                'itag':           tag,
+                'iserial':        serial_number,
+            })
+            return redirect(f"{reverse('component-detail', kwargs={'pk': comp.pk})}?{params}")
+
         instance = ComponentInstance.objects.create(
             tag=tag,
             serial_number=serial_number,
@@ -375,16 +420,18 @@ def component_instance_create(request, pk):
 @login_required
 def component_transfer_owner(request, pk):
     """Transfer a component's ownership to another member of its own
-    owner_group, from the "Current Owner" control on the component detail
-    page. Only members of the component's owner_group may initiate a
-    transfer -- same authorization pattern as component_instance_create,
-    enforced with 403 on an unauthorized POST, not just hidden client-side.
+    owner_group (or to any superuser), from the "Current Owner" control on
+    the component detail page. Only members of the component's owner_group
+    -- or a superuser -- may initiate a transfer -- same authorization
+    pattern as component_instance_create, enforced with 403 on an
+    unauthorized POST, not just hidden client-side.
 
-    The new owner must themselves belong to the component's owner_group --
-    the dropdown only ever offers group members, but a POST naming someone
-    outside the group is a business-rule violation from an otherwise
-    authorized user, not an authorization breach, so it's silently ignored
-    (component redirects unchanged) rather than rejected with 403."""
+    The new owner must themselves belong to the component's owner_group, or
+    be a superuser -- the dropdown only ever offers that set, but a POST
+    naming someone outside it is a business-rule violation from an
+    otherwise authorized user, not an authorization breach, so it's
+    silently ignored (component redirects unchanged) rather than rejected
+    with 403."""
     comp = get_object_or_404(Component, pk=pk)
     user_group_ids = set(request.user.groups.values_list('id', flat=True))
     can_transfer = (
@@ -396,7 +443,10 @@ def component_transfer_owner(request, pk):
         if not can_transfer:
             return HttpResponseForbidden("You don't have permission to change this component's owner.")
         new_owner_id = request.POST.get('owner_user') or None
-        if new_owner_id and User.objects.filter(pk=new_owner_id, groups=comp.owner_group_id).exists():
+        valid_target_q = Q(is_superuser=True)
+        if comp.owner_group_id:
+            valid_target_q |= Q(groups=comp.owner_group_id)
+        if new_owner_id and User.objects.filter(valid_target_q, pk=new_owner_id).exists():
             if comp.owner_user_id != int(new_owner_id):
                 old_owner = comp.owner_user
                 new_owner = User.objects.get(pk=new_owner_id)
@@ -422,44 +472,63 @@ def component_transfer_owner(request, pk):
 @login_required
 def inventory_list(request):
     """List/search the inventory. Also handles the "Add Inventory Item"
-    pop-up form: a POST here (component, tag, serial number, location,
-    group) creates a ComponentInstance and redirects to its detail page.
-    The owner is always the logged-in user, and the group dropdown is
-    restricted to groups that user actually belongs to. On validation
-    failure the list re-renders with the modal reopened and the entered
-    values kept."""
+    pop-up form: a POST here (component, tag, serial number, location)
+    creates a ComponentInstance and redirects to its detail page. The owner
+    is always the logged-in user. owner_group is never chosen independently
+    here -- it's always inherited from the selected component's own
+    owner_group, the same rule component_instance_create uses, so an
+    instance can never end up in a different group than the component it's
+    an instance of.
+
+    Only members of a component's own owner_group -- or a superuser -- may
+    create an instance of it. Same rule as component_instance_create's
+    can_add check (including the superuser exception, which matches
+    can_edit_properties/can_transfer_owner elsewhere in this file), kept
+    identical on purpose so the two "Add Instance" entry points behave the
+    same way. The Component dropdown is pre-filtered to the components a
+    given user is actually allowed to add (all of them, for a superuser),
+    so this is normally impossible to hit through the UI; the check here is
+    the authoritative, server-side backstop.
+
+    Location is required -- a physical item always has one, even if that's
+    "at the manufacturer" or in transit. On validation failure the list
+    re-renders with the modal reopened and the entered values kept."""
     form_error = None
     form_data  = {}
+    user_group_ids = set(request.user.groups.values_list('id', flat=True))
 
     if request.method == 'POST':
         tag           = request.POST.get('tag', '').strip()
         serial_number = request.POST.get('serial_number', '').strip()
         component_id  = request.POST.get('component') or None
         location_id   = request.POST.get('location') or None
-        group_id      = request.POST.get('owner_group') or None
         form_data = {
             'tag':           tag,
             'serial_number': serial_number,
             'component':     component_id or '',
             'location':      location_id or '',
-            'owner_group':   group_id or '',
         }
 
-        user_group_ids = set(request.user.groups.values_list('id', flat=True))
+        component = Component.objects.filter(pk=component_id).first() if component_id else None
 
         if not component_id:
             form_error = 'Please choose a component.'
-        elif not Component.objects.filter(pk=component_id).exists():
+        elif not component:
             form_error = 'Please choose a valid component.'
-        elif group_id and int(group_id) not in user_group_ids:
-            form_error = 'You can only assign a group you belong to.'
+        elif not (
+            request.user.is_superuser
+            or (component.owner_group_id and component.owner_group_id in user_group_ids)
+        ):
+            form_error = 'You can only add inventory items for components owned by a group you belong to.'
+        elif not location_id:
+            form_error = 'Please choose a location.'
         else:
             instance = ComponentInstance.objects.create(
                 tag=tag,
                 serial_number=serial_number,
                 component_id=component_id,
                 location_id=location_id,
-                owner_group_id=group_id,
+                owner_group=component.owner_group,
                 owner_user=request.user,
                 created_by=request.user,
             )
@@ -542,9 +611,15 @@ def inventory_list(request):
         'users':        User.objects.order_by('username'),
         'query_str':    _qs(request),
         'active_page':  'inventory',
-        'components':      Component.objects.order_by('name'),
+        # Only components owned by a group this user belongs to (all of
+        # them, for a superuser) -- matches the server-side check on POST
+        # above, so the dropdown never offers a choice that would just be
+        # rejected.
+        'components': (
+            Component.objects.order_by('name') if request.user.is_superuser
+            else Component.objects.filter(owner_group_id__in=user_group_ids).order_by('name')
+        ),
         'locations':       Location.objects.select_related('institution').order_by('name'),
-        'user_groups':     request.user.groups.order_by('name'),
         'show_add_button': True,
         'form_error':      form_error,
         'form_data':       form_data,
@@ -677,9 +752,17 @@ def inventory_detail(request, pk):
     # message points the user at removing it from the design first.
     can_delete   = can_transfer_owner
     is_in_design = bool(instance.design_installations.all())
-    group_members = (
-        instance.owner_group.user_set.order_by('username') if instance.owner_group_id else User.objects.none()
-    )
+    # Group members plus every superuser -- superusers can own (or be
+    # assigned) an instance outside their own groups, so they must always
+    # be valid transfer targets. The current owner is included even if
+    # they fit neither bucket, so the dropdown never silently shows blank
+    # for a real, already-set owner (e.g. a superuser who created it).
+    owner_choices_q = Q(is_superuser=True)
+    if instance.owner_group_id:
+        owner_choices_q |= Q(groups=instance.owner_group_id)
+    if instance.owner_user_id:
+        owner_choices_q |= Q(pk=instance.owner_user_id)
+    group_members = User.objects.filter(owner_choices_q).distinct().order_by('username')
     missing_identifiers = not instance.tag or not instance.serial_number
 
     context = {
@@ -800,12 +883,13 @@ def inventory_update_identifiers(request, pk):
 @login_required
 def inventory_transfer_owner(request, pk):
     """Transfer a ComponentInstance's ownership to another member of its own
-    owner_group, from the "Current Owner" control on the instance detail
-    page. Same pattern as component_transfer_owner: group members (or any
-    superuser) may initiate a transfer, enforced server-side with 403 on an
-    unauthorized POST; a target user outside the owner_group is a
-    business-rule violation from an otherwise authorized user, not an
-    authorization breach, so it's silently ignored rather than rejected."""
+    owner_group, or to any superuser, from the "Current Owner" control on
+    the instance detail page. Same pattern as component_transfer_owner:
+    group members (or any superuser) may initiate a transfer, enforced
+    server-side with 403 on an unauthorized POST; a target user outside
+    that set (group member or superuser) is a business-rule violation from
+    an otherwise authorized user, not an authorization breach, so it's
+    silently ignored rather than rejected."""
     instance = get_object_or_404(ComponentInstance, pk=pk)
     user_group_ids = set(request.user.groups.values_list('id', flat=True))
     can_transfer = (
@@ -817,7 +901,10 @@ def inventory_transfer_owner(request, pk):
         if not can_transfer:
             return HttpResponseForbidden("You don't have permission to change this instance's owner.")
         new_owner_id = request.POST.get('owner_user') or None
-        if new_owner_id and User.objects.filter(pk=new_owner_id, groups=instance.owner_group_id).exists():
+        valid_target_q = Q(is_superuser=True)
+        if instance.owner_group_id:
+            valid_target_q |= Q(groups=instance.owner_group_id)
+        if new_owner_id and User.objects.filter(valid_target_q, pk=new_owner_id).exists():
             if instance.owner_user_id != int(new_owner_id):
                 old_owner = instance.owner_user
                 new_owner = User.objects.get(pk=new_owner_id)

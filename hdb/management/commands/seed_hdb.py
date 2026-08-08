@@ -215,9 +215,6 @@ class Command(BaseCommand):
         weight_pt, _ = PropertyType.objects.get_or_create(
             name="Weight", defaults={"category": "physical", "default_units": "kg"},
         )
-        datasheet_pt, _ = PropertyType.objects.get_or_create(
-            name="Datasheet", defaults={"category": "documentation", "handler": "document"},
-        )
         timing_constant_pt, _ = PropertyType.objects.get_or_create(
             name="Timing Constant", defaults={"category": "physical", "default_units": "ps"},
         )
@@ -239,10 +236,6 @@ class Command(BaseCommand):
         PropertyValue.objects.get_or_create(
             component=crystal, property_type=weight_pt, tag="",
             defaults={"value": "0.45", "units": "kg"},
-        )
-        PropertyValue.objects.get_or_create(
-            component=crystal, property_type=datasheet_pt, tag="",
-            defaults={"value": "https://example.org/pwo-crystal-datasheet.pdf"},
         )
         PropertyValue.objects.get_or_create(
             component=crystal, property_type=length_pt, tag="",

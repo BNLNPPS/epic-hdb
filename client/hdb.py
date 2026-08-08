@@ -433,8 +433,8 @@ def cmd_create_instance(client, args):
 
     Individual flags
     ----------------
-      bin/hdb --user crafts create-instance --by-name "ePIC SVT Strip Sensor" --tag SN-001
-      bin/hdb --user crafts create-instance --by-pk   <UUID> --serial 20240101 --group BEMC
+      bin/hdb --user crafts create-instance --by-name "ePIC SVT Strip Sensor" --tag SN-001 --location "Room 112B"
+      bin/hdb --user crafts create-instance --by-pk   <UUID> --serial 20240101 --location "Room 112B" --group BEMC
 
     YAML file input
     ---------------
@@ -485,6 +485,12 @@ def cmd_create_instance(client, args):
     if not by_name and not by_pk:
         print("Error: supply --by-name or --by-pk (or set by_name/by_pk in the YAML file)",
               file=sys.stderr)
+        sys.exit(1)
+
+    if not location:
+        print("Error: supply --location (or set location in the YAML file) -- a physical "
+              "inventory item always has one, even if that's the manufacturer or a "
+              "shipping/transit location", file=sys.stderr)
         sys.exit(1)
 
     # ── Create instance ──────────────────────────────────────────────────────
@@ -586,7 +592,9 @@ def build_parser():
     sp.add_argument("--serial",      metavar="NUM",    default="",
                     help="Manufacturer serial number")
     sp.add_argument("--location",    metavar="NAME",   default=None,
-                    help="Location name (must exist in the database)")
+                    help="Location name (must exist in the database). Required -- "
+                         "every physical item has one, even if that's the "
+                         "manufacturer or a shipping/transit location")
     sp.add_argument("--group",       metavar="GROUP",  default=None,
                     help="Owner group name -- must exist, and the acting "
                          "--user must belong to it (or be staff/superuser)")

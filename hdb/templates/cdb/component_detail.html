@@ -315,25 +315,29 @@ dialog.modal::backdrop { background: rgba(20,23,34,.45); }
     {% csrf_token %}
     <div class="modal-header"><h2>Add Instance</h2></div>
     <div class="modal-body">
+      {% if instance_error %}<div class="modal-error">{{ instance_error }}</div>{% endif %}
       <p style="font-size:12px;color:var(--muted);margin:0">
         Creates a new inventory instance of {{ component.name }}, owned by {{ component.owner_group }}.
       </p>
       <div class="modal-field">
         <label for="ai2-tag">Tag</label>
-        <input type="text" id="ai2-tag" name="tag">
+        <input type="text" id="ai2-tag" name="tag" value="{{ instance_form_data.tag|default:'' }}">
       </div>
       <div class="modal-field">
         <label for="ai2-serial">Serial Number</label>
-        <input type="text" id="ai2-serial" name="serial_number">
+        <input type="text" id="ai2-serial" name="serial_number" value="{{ instance_form_data.serial_number|default:'' }}">
       </div>
       <div class="modal-field">
-        <label for="ai2-location">Location</label>
-        <select id="ai2-location" name="location">
+        <label for="ai2-location">Location *</label>
+        <select id="ai2-location" name="location" required>
           <option value="">—</option>
           {% for loc in locations %}
             <option value="{{ loc.pk }}">{{ loc.full_path }}</option>
           {% endfor %}
         </select>
+        <div style="font-size:11px;color:var(--muted);margin-top:4px">
+          Every physical item needs a location -- use the manufacturer or a shipping/transit location if it hasn't arrived at a lab yet.
+        </div>
       </div>
     </div>
     <div class="modal-footer">
@@ -348,6 +352,9 @@ dialog.modal::backdrop { background: rgba(20,23,34,.45); }
   dlg.addEventListener('click', function (e) {
     if (e.target === dlg) dlg.close();
   });
+  {% if open_instance_modal %}
+  dlg.showModal();
+  {% endif %}
 })();
 </script>
 {% endif %}

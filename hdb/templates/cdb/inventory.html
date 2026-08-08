@@ -66,6 +66,7 @@ dialog.modal::backdrop { background: rgba(20,23,34,.45); }
             </option>
           {% endfor %}
         </select>
+        {% if not components %}<div style="font-size:11.5px;color:var(--muted);margin-top:4px">You don't belong to a group that owns any components yet.</div>{% endif %}
       </div>
       <div class="modal-field">
         <label for="ai-tag">Tag</label>
@@ -76,23 +77,19 @@ dialog.modal::backdrop { background: rgba(20,23,34,.45); }
         <input type="text" id="ai-serial" name="serial_number" value="{{ form_data.serial_number|default:'' }}">
       </div>
       <div class="modal-field">
-        <label for="ai-location">Location</label>
-        <select id="ai-location" name="location">
+        <label for="ai-location">Location *</label>
+        <select id="ai-location" name="location" required>
           <option value="">—</option>
           {% for loc in locations %}
             <option value="{{ loc.pk }}" {% if form_data.location == loc.pk %}selected{% endif %}>{{ loc.full_path }}</option>
           {% endfor %}
         </select>
+        <div style="font-size:11px;color:var(--muted);margin-top:4px">
+          Every physical item needs a location -- use the manufacturer or a shipping/transit location if it hasn't arrived at a lab yet.
+        </div>
       </div>
-      <div class="modal-field">
-        <label for="ai-group">Group</label>
-        <select id="ai-group" name="owner_group">
-          <option value="">—</option>
-          {% for grp in user_groups %}
-            <option value="{{ grp.pk }}" {% if form_data.owner_group == grp.pk|stringformat:"s" or forloop.first and not form_data %}selected{% endif %}>{{ grp.name }}</option>
-          {% endfor %}
-        </select>
-        {% if not user_groups %}<div style="font-size:11.5px;color:var(--muted);margin-top:4px">You don't belong to any group yet.</div>{% endif %}
+      <div style="font-size:11.5px;color:var(--muted)">
+        Owner group is inherited from the selected component's owner group.
       </div>
     </div>
     <div class="modal-footer">
