@@ -8,9 +8,10 @@ from urllib.parse import urlencode
 
 from django.shortcuts import render, get_object_or_404, redirect
 from django.urls import reverse
-from django.http import HttpResponseForbidden, HttpResponse
+from django.http import HttpResponseForbidden, HttpResponseNotAllowed, HttpResponse
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.models import User, Group
+from django.core.exceptions import ValidationError
 from django.db.models import Q, Count
 from django.core.paginator import Paginator
 import qrcode
@@ -19,6 +20,7 @@ from .models import (
     Component, ComponentInstance, Design, DesignElement,
     DesignTemplate, DesignTemplateElement, DesignElementInstance,
     Institution, Location, LogEntry, TechnicalSystem, PropertyType, PropertyValue,
+    TEMPLATE_NESTING_MAX_DEPTH,
 )
 
 
@@ -50,6 +52,104 @@ def _resolve_page_size(request):
     except (TypeError, ValueError):
         return DEFAULT_PAGE_SIZE
     return size if size in PAGE_SIZE_CHOICES else DEFAULT_PAGE_SIZE
+
+
+def _to_pk_int(value):
+    """Parse a POST value as an integer PK (User/Group use Django's default
+    integer AutoField). Returns None if missing or not a valid integer, so
+    a malformed/tampered POST is treated as "no such target" rather than
+    raising an unhandled ValueError from the ORM."""
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _unique_design_name(base):
+    """Return `base`, or `base` with an incrementing " (N)" suffix, so a
+    recursively auto-created child Design (see _instantiate_design below)
+    never collides with an existing one -- Design.name is globally unique."""
+    if not Design.objects.filter(name=base).exists():
+        return base
+    n = 2
+    while Design.objects.filter(name=f"{base} ({n})").exists():
+        n += 1
+    return f"{base} ({n})"
+
+
+def _instantiate_design(template, name, requesting_user, _depth=0):
+    """Instantiate `template` into a real Design -- one DesignElement per
+    placeholder. For a COMPONENT placeholder this is exactly what
+    design_list has always done. For a TEMPLATE placeholder (a nested
+    sub-template, see DesignTemplateElement.child_template), a child
+    Design is *also* auto-instantiated the same way (recursively, so
+    multi-level templates produce a fully wired-up multi-level Design on
+    the first instantiation, not an empty slot someone has to fill in by
+    hand) and the resulting DesignElement's child_design points at it.
+    quantity is left as-is either way: DesignBOMView.walk() / _build_bom()
+    both already treat a child_design element's quantity as a multiplier
+    over that child's own BOM contents, so "144 Half-Stave Assemblies"
+    means one exemplar Half-Stave Design counted 144 times in the parts
+    explosion, not 144 separate Design rows -- nothing downstream needs to
+    change for this to compute correctly.
+
+    Every nested sub-template carries its OWN owner_group into the child
+    Design it produces (not the parent Design's), same as the top-level
+    design already does; the acting user becomes owner_user throughout,
+    top and every auto-created child alike. In practice a child_template
+    is now required to share its parent template's owner_group (and
+    project) -- see DesignTemplate.can_nest -- so this will typically be
+    the same group as the parent anyway; it's written per-child rather
+    than copied from the top level because that invariant lives on
+    DesignTemplateElement, not here, and this function shouldn't have to
+    assume it still holds. Authorization is checked once, by the caller,
+    against the top-level template being instantiated -- a nested
+    sub-template is instantiated as a cascading part of that single
+    authorized action, not as a separate one requiring its own group
+    membership.
+
+    Bounded by TEMPLATE_NESTING_MAX_DEPTH as belt-and-suspenders on top of
+    DesignTemplateElement.save() already making a self-nesting cycle
+    impossible to create in the first place -- so in practice this
+    recursion is guaranteed to terminate on any template tree that could
+    exist at all, and this check should never actually trigger."""
+    if _depth > TEMPLATE_NESTING_MAX_DEPTH:
+        raise ValidationError(
+            f"Template nesting exceeds the maximum supported depth "
+            f"({TEMPLATE_NESTING_MAX_DEPTH}) while instantiating {template.name!r}."
+        )
+    design = Design.objects.create(
+        name=name,
+        description=template.description,
+        project=template.project,
+        template=template,
+        owner_group=template.owner_group,
+        owner_user=requesting_user,
+    )
+    for el in template.elements.select_related('component', 'child_template'):
+        if el.child_template_id:
+            child_design = _instantiate_design(
+                el.child_template,
+                _unique_design_name(f"{name} / {el.element_name}"),
+                requesting_user,
+                _depth + 1,
+            )
+            DesignElement.objects.create(
+                design=design,
+                element_name=el.element_name,
+                child_design=child_design,
+                quantity=el.quantity,
+                description=el.description,
+            )
+        else:
+            DesignElement.objects.create(
+                design=design,
+                element_name=el.element_name,
+                component=el.component,
+                quantity=el.quantity,
+                description=el.description,
+            )
+    return design
 
 
 # ── Dashboard ─────────────────────────────────────────────────────────────────
@@ -442,12 +542,12 @@ def component_transfer_owner(request, pk):
     if request.method == 'POST':
         if not can_transfer:
             return HttpResponseForbidden("You don't have permission to change this component's owner.")
-        new_owner_id = request.POST.get('owner_user') or None
+        new_owner_id = _to_pk_int(request.POST.get('owner_user'))
         valid_target_q = Q(is_superuser=True)
         if comp.owner_group_id:
             valid_target_q |= Q(groups=comp.owner_group_id)
-        if new_owner_id and User.objects.filter(valid_target_q, pk=new_owner_id).exists():
-            if comp.owner_user_id != int(new_owner_id):
+        if new_owner_id is not None and User.objects.filter(valid_target_q, pk=new_owner_id).exists():
+            if comp.owner_user_id != new_owner_id:
                 old_owner = comp.owner_user
                 new_owner = User.objects.get(pk=new_owner_id)
                 comp.owner_user = new_owner
@@ -900,12 +1000,12 @@ def inventory_transfer_owner(request, pk):
     if request.method == 'POST':
         if not can_transfer:
             return HttpResponseForbidden("You don't have permission to change this instance's owner.")
-        new_owner_id = request.POST.get('owner_user') or None
+        new_owner_id = _to_pk_int(request.POST.get('owner_user'))
         valid_target_q = Q(is_superuser=True)
         if instance.owner_group_id:
             valid_target_q |= Q(groups=instance.owner_group_id)
-        if new_owner_id and User.objects.filter(valid_target_q, pk=new_owner_id).exists():
-            if instance.owner_user_id != int(new_owner_id):
+        if new_owner_id is not None and User.objects.filter(valid_target_q, pk=new_owner_id).exists():
+            if instance.owner_user_id != new_owner_id:
                 old_owner = instance.owner_user
                 new_owner = User.objects.get(pk=new_owner_id)
                 instance.owner_user = new_owner
@@ -1033,32 +1133,27 @@ def design_list(request):
         elif Design.objects.filter(name=name).exists():
             form_error = f'A design named "{name}" already exists.'
         else:
-            design = Design.objects.create(
-                name=name,
-                description=template.description,
-                project=template.project,
-                template=template,
-                owner_group=template.owner_group,
-                owner_user=request.user,
-            )
-            for el in template.elements.all():
-                DesignElement.objects.create(
+            # _instantiate_design recurses into any nested (child_template)
+            # placeholders, auto-creating their own child Designs the same
+            # way -- see its docstring. A depth-exceeded ValidationError is
+            # not expected to actually happen (cycle prevention already
+            # makes the template tree finite), but treat it as a form
+            # error rather than a raw 500 if it somehow does.
+            try:
+                design = _instantiate_design(template, name, request.user)
+            except ValidationError as exc:
+                form_error = str(exc.message) if hasattr(exc, 'message') else str(exc)
+            else:
+                LogEntry.objects.create(
                     design=design,
-                    element_name=el.element_name,
-                    component=el.component,
-                    quantity=el.quantity,
-                    description=el.description,
+                    topic='design',
+                    logged_by=request.user,
+                    entry=(
+                        f"Design {design.name} created from template {template.name} by "
+                        f"{request.user.get_full_name() or request.user.username}."
+                    ),
                 )
-            LogEntry.objects.create(
-                design=design,
-                topic='design',
-                logged_by=request.user,
-                entry=(
-                    f"Design {design.name} created from template {template.name} by "
-                    f"{request.user.get_full_name() or request.user.username}."
-                ),
-            )
-            return redirect('design-detail', pk=design.pk)
+                return redirect('design-detail', pk=design.pk)
 
     q         = request.GET.get('q', '')
     group     = request.GET.get('group', '')
@@ -1450,11 +1545,11 @@ def template_list(request):
     if request.method == 'POST':
         name        = request.POST.get('name', '').strip()
         description = request.POST.get('description', '').strip()
-        group_id    = request.POST.get('owner_group') or None
-        form_data   = {'name': name, 'description': description, 'owner_group': group_id or ''}
+        group_id    = _to_pk_int(request.POST.get('owner_group'))
+        form_data   = {'name': name, 'description': description, 'owner_group': request.POST.get('owner_group', '')}
 
-        allowed_group = group_id and (
-            request.user.is_superuser or int(group_id) in user_group_ids
+        allowed_group = group_id is not None and (
+            request.user.is_superuser or group_id in user_group_ids
         ) and Group.objects.filter(pk=group_id).exists()
 
         if not name:
@@ -1511,14 +1606,29 @@ def template_list(request):
 
 @login_required
 def template_detail(request, pk):
-    """Design Template detail page: the placeholder table plus editing
-    tools. A POST here adds a placeholder (element_name, component,
-    quantity). Members of the template's owner_group (or a superuser) may
-    edit; everyone else sees a read-only view and gets 403 on a direct
-    POST."""
+    """Design Template detail page: the placeholder table (read-only),
+    the hierarchy breadcrumb, and template metadata (nesting levels,
+    product_component, etc).
+
+    Placeholders can no longer be *added* here -- design template
+    hierarchies are now defined in YAML and loaded via hdb_client /
+    the "hdb load-template" CLI command (see client/README.md), so that
+    a git-tracked YAML file is always the single source of truth and the
+    database can never quietly drift from it. This view now only serves
+    GET; a stray POST (an old bookmark, a saved form) gets a clean 405
+    rather than silently doing nothing while looking like it worked, or
+    -- worse -- silently succeeding the way it used to.
+
+    Per-row quantity editing and placeholder removal (template_element_
+    update / template_element_delete below) are, for now, still reachable
+    for owner_group members -- only *adding* a placeholder was removed in
+    this pass. See those views' docstrings."""
+    if request.method != 'GET':
+        return HttpResponseNotAllowed(['GET'])
+
     template = get_object_or_404(
         DesignTemplate.objects.select_related('owner_group', 'owner_user')
-                              .prefetch_related('elements__component'),
+                              .prefetch_related('elements__component', 'elements__child_template'),
         pk=pk,
     )
 
@@ -1535,55 +1645,34 @@ def template_detail(request, pk):
     # designs yet stays fully editable.
     is_locked = template.designs.exists()
     can_edit  = is_member and not is_locked
+    # A template referenced as another template's child_template placeholder
+    # can't be deleted either (child_template is PROTECTed -- see the model)
+    # -- surfaced here too so the "Delete Template" button is hidden for the
+    # same reason it's hidden for is_locked, rather than only failing on the
+    # POST itself.
+    is_referenced = template.parent_elements.exists()
     # Deletion is a stricter, separate permission from editing: any
-    # owner_group member may add/remove placeholders, but only a superuser
-    # may delete the template outright (see template_delete below).
-    can_delete = request.user.is_superuser and not is_locked
+    # owner_group member may edit surviving placeholders, but only a
+    # superuser may delete the template outright (see template_delete below).
+    can_delete = request.user.is_superuser and not is_locked and not is_referenced
 
-    form_error = None
-    form_data  = {}
-
-    if request.method == 'POST':
-        if not is_member:
-            return HttpResponseForbidden("You don't have permission to edit this template.")
-        if is_locked:
-            # Authorized user, but the template is frozen -- state-based
-            # business rule, not an authorization failure: ignore silently.
-            return redirect('template-detail', pk=template.pk)
-        element_name = request.POST.get('element_name', '').strip()
-        component_id = request.POST.get('component') or None
-        try:
-            quantity = max(int(request.POST.get('quantity', 1)), 1)
-        except (TypeError, ValueError):
-            quantity = 1
-        form_data = {'element_name': element_name, 'component': component_id or '', 'quantity': quantity}
-
-        if not element_name:
-            form_error = 'Placeholder name is required.'
-        elif template.elements.filter(element_name=element_name).exists():
-            form_error = f'This template already has a placeholder named "{element_name}".'
-        elif not component_id or not Component.objects.filter(pk=component_id).exists():
-            form_error = 'Please choose a component.'
-        else:
-            DesignTemplateElement.objects.create(
-                template=template,
-                element_name=element_name,
-                component_id=component_id,
-                quantity=quantity,
-            )
-            return redirect('template-detail', pk=template.pk)
+    # Breadcrumb: this template's place in the nesting hierarchy, root
+    # first, with one-click navigation to any ancestor -- and, at any
+    # slot where more than one template could legally sit (a "diamond"
+    # shape, see DesignTemplate.parent_templates), the alternatives too,
+    # so the trail never silently hides an ambiguous parent. This is a
+    # read-only feature, so it's computed regardless of can_edit.
+    breadcrumb_ancestors = template.breadcrumb_ancestors()
 
     context = {
-        'template':     template,
-        'can_edit':     can_edit,
-        'can_delete':   can_delete,
-        'is_locked':    is_locked,
-        'components':   Component.objects.order_by('name'),
-        'designs_from': template.designs.select_related('owner_user').order_by('name'),
-        'form_error':   form_error,
-        'form_data':    form_data,
-        'open_modal':   bool(form_error),
-        'active_page':  'design-templates',
+        'template':             template,
+        'can_edit':             can_edit,
+        'can_delete':           can_delete,
+        'is_locked':            is_locked,
+        'is_referenced':        is_referenced,
+        'breadcrumb_ancestors': breadcrumb_ancestors,
+        'designs_from':         template.designs.select_related('owner_user').order_by('name'),
+        'active_page':          'design-templates',
     }
     return render(request, 'cdb/template_detail.html', context)
 
@@ -1593,9 +1682,14 @@ def template_delete(request, pk):
     """Delete a Design Template entirely, from the "Delete Template" button
     on its detail page (confirmed client-side first) -- modeled on
     design_delete. Only possible while the template is unlocked, i.e. no
-    Design has ever been instantiated from it; the button itself is hidden
-    once it's locked (see template_detail's is_locked), and this is the
-    authoritative server-side check, not just a hidden control.
+    Design has ever been instantiated from it, AND while no other
+    template's placeholder nests this one as its child_template --
+    child_template is PROTECTed (see the model) precisely so this can't
+    silently orphan another template's placeholder. The button itself is
+    hidden in both cases (see template_detail's is_locked/is_referenced),
+    and this is the authoritative server-side check, not just a hidden
+    control: without it, a direct POST past a PROTECTed reference would
+    raise an unhandled ProtectedError instead of failing gracefully.
 
     Unlike editing a template (open to any owner_group member), deletion is
     superuser-only -- a deliberate, stricter policy than the usual
@@ -1608,11 +1702,12 @@ def template_delete(request, pk):
     if request.method == 'POST':
         if not can_delete:
             return HttpResponseForbidden("You don't have permission to delete this template.")
-        if template.designs.exists():
-            # Locked -- a design exists based on this template. Business-rule
-            # state check, not an authorization failure: ignore silently
-            # rather than 403, same treatment as the other locked-template
-            # POSTs above.
+        if template.designs.exists() or template.parent_elements.exists():
+            # Locked (a design exists based on this template) or referenced
+            # as another template's nested sub-template placeholder --
+            # either way a business-rule/state check, not an authorization
+            # failure: ignore silently rather than 403 or crash, same
+            # treatment as the other locked-template POSTs above.
             return redirect('template-detail', pk=template.pk)
         template.delete()
         return redirect('template-list')

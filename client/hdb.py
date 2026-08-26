@@ -264,8 +264,11 @@ def cmd_load_template(client, args):
         print(f"Template {r['template']!r}: {status}")
         for el in r["elements"]:
             el_status = "created" if el["element_created"] else "already existed"
-            comp_status = " (component created)" if el["component_created"] else ""
-            print(f"  - {el['element_name']}: {el['component']}{comp_status} [{el_status}]")
+            if "child_template" in el:
+                print(f"  - {el['element_name']}: [template] {el['child_template']} [{el_status}]")
+            else:
+                comp_status = " (component created)" if el["component_created"] else ""
+                print(f"  - {el['element_name']}: {el['component']}{comp_status} [{el_status}]")
 
 
 def cmd_bom_template(client, args):
@@ -281,7 +284,10 @@ def cmd_bom_template(client, args):
         def _print(rows, indent=0):
             for row in rows:
                 prefix = "  " * indent
-                print(f"{prefix}{row['element']}  x{row['qty']}  -> {row['component']} ({row['model_number'] or '--'})")
+                if row.get("type") == "TEMPLATE":
+                    print(f"{prefix}{row['element']}  x{row['qty']}  -> [template] {row['ref']}")
+                else:
+                    print(f"{prefix}{row['element']}  x{row['qty']}  -> {row['ref']} ({row.get('model_number') or '--'})")
                 _print(row.get("children", []), indent + 1)
         _print(data)
 

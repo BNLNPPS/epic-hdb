@@ -29,12 +29,13 @@
 # (288 / 2 = 144) as a reasonable, clearly-flagged estimate for the "BTOF
 # Stave" template's quantity below. Everything else is sourced directly.
 #
-# Component/technical-system naming convention for this flat-template
-# approach (see client/README.md, "Design templates" section): each
-# assembly level is BOTH a catalog Component AND a DesignTemplate of the
-# identical name, so `hdb bom-template "BTOF Stave"` can recurse through
-# all three levels down to the AC-LGAD Sensor / FCFDv2 Readout components
-# already in the seed catalog.
+# Each assembly level is its own DesignTemplate; a higher level's element
+# nests the level below it directly via child_template (see
+# client/README.md, "Design templates" section), so `hdb bom-template
+# "BTOF Stave"` recurses through all three levels down to the AC-LGAD
+# Sensor / FCFDv2 Readout components already in the seed catalog. Loaded
+# top to bottom below, so leaf-first: a child_template reference must name
+# a template that's already been created earlier in this same file.
 # ---------------------------------------------------------------------------
 
 templates:
@@ -52,6 +53,16 @@ templates:
         thermally/electrically qualified as a standalone unit before
         being mounted onto a half-stave (baseline "modularized stave"
         design, BTOF DAC review 5/31/2025).
+      # The catalog entry for one physically completed, QA'd stavelet --
+      # this is what a real ComponentInstance is created against once a
+      # stavelet has actually been built (see the file header note on why
+      # stavelets are tracked individually). Independent of this template
+      # nesting into "BTOF Half-Stave" below.
+      product_component:
+        name: "BTOF Stavelet"
+        model_number: "BTOF-STAVELET-R1"
+        description: "162 mm double-sided AC-LGAD stavelet module (see BTOF Stavelet template)."
+        technical_system: "BTOF-Mechanical"
     elements:
       - element_name: "AC-LGAD Sensors"
         quantity: 4
@@ -98,15 +109,16 @@ templates:
         on a carbon-honeycomb support with active pipe cooling. 288 of
         these are the fundamental counted unit of the whole BTOF detector
         (32 AC-LGAD sensors/half-stave = 8 stavelets x 4 sensors).
+      product_component:
+        name: "BTOF Half-Stave"
+        model_number: "BTOF-HALFSTAVE-R1"
+        description: "1316 mm BTOF half-stave, 8 stavelets (see BTOF Half-Stave template)."
+        technical_system: "BTOF-Mechanical"
     elements:
       - element_name: "Stavelet Modules"
         quantity: 8
         description: "8 x 162 mm = 1296 mm of active length per half-stave."
-        component:
-          name: "BTOF Stavelet"
-          model_number: "BTOF-STAVELET-R1"
-          description: "162 mm double-sided AC-LGAD stavelet module (see BTOF Stavelet template)."
-          technical_system: "BTOF-Mechanical"
+        child_template: "BTOF Stavelet"
 
       - element_name: "Peripheral Board"
         quantity: 1
@@ -142,11 +154,7 @@ templates:
       - element_name: "Half-Stave Assemblies"
         quantity: 144
         description: "Estimated count -- see file header note on the 288-total / 2-stave-sections split."
-        component:
-          name: "BTOF Half-Stave"
-          model_number: "BTOF-HALFSTAVE-R1"
-          description: "1316 mm BTOF half-stave, 8 stavelets (see BTOF Half-Stave template)."
-          technical_system: "BTOF-Mechanical"
+        child_template: "BTOF Half-Stave"
 
       - element_name: "Carbon Honeycomb Support"
         quantity: 1

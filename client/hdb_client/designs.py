@@ -87,18 +87,20 @@ class DesignClient:
 
         return _flat(self.bom(design_name))
 
-    # -- Design templates (flat blueprints) -----------------------------
+    # -- Design templates (nested blueprints) ----------------------------
     #
-    # DesignTemplateElement.component is a required FK to a real catalog
-    # Component -- there is no "sub-template" reference on the model (see
-    # client/README.md for why). To represent a multi-level assembly
-    # (e.g. Stave > Half-Stave > Stavelet) with flat templates, each
-    # intermediate level is modeled as its own catalog Component *and* its
-    # own DesignTemplate of the SAME NAME -- template_bom() below follows
-    # that name match to recurse, the same way a real BOM follows
-    # child_design. This is a naming convention, not a schema constraint,
-    # so keep template names and their corresponding assembly Component
-    # names identical when authoring a multi-level template set.
+    # DesignTemplateElement has a real child_template FK, mirroring how
+    # DesignElement.child_design lets a real Design nest another Design.
+    # A multi-level assembly (e.g. Stave > Half-Stave > Stavelet) is a
+    # DesignTemplate per level, with the higher level's element pointing
+    # at the level below's *template* directly (not, as in an earlier
+    # version of this schema, a same-named Component -- that name-matching
+    # convention is gone; see client/README.md). A template can never
+    # nest itself, at any depth -- DesignTemplateElement.save() enforces
+    # this unconditionally (ValidationError on an attempted cycle), so
+    # template_bom()'s recursion below is guaranteed to terminate on any
+    # template tree that could exist at all; the _max depth guard is
+    # read-time defense-in-depth on top of that, not the primary defense.
 
     def all_templates(self):
         return _m().DesignTemplate.objects.select_related("owner_group", "owner_user")
@@ -112,7 +114,7 @@ class DesignClient:
     def template_elements(self, template_name: str):
         return _m().DesignTemplateElement.objects.filter(
             template__name=template_name
-        ).select_related("component", "template")
+        ).select_related("component", "child_template", "template")
 
     def _resolve_component(self, spec, default_project: str = "ePIC"):
         """
@@ -177,6 +179,7 @@ class DesignClient:
         description: str = "",
         owner_group_name: str | None = None,
         owner_username: str | None = None,
+        product_component=None,
         elements=(),
     ) -> dict:
         """
@@ -189,15 +192,42 @@ class DesignClient:
         are recorded on the template if given, but there is no requirement
         that `self.user` belong to that group.
 
-        `elements` is an iterable of dicts:
+        `product_component` (optional): str | dict, same shape as an
+        element's "component" (see _resolve_component()) -- the catalog
+        Component representing one built instance of this template's
+        assembly, e.g. so a physically completed "BTOF Stavelet" can be
+        tracked as inventory. Independent of nesting: set this whether or
+        not this template is ALSO used as another template's
+        child_template placeholder.
+
+        `elements` is an iterable of dicts, each specifying exactly one of
+        "component" (a leaf part) or "child_template" (a nested
+        sub-assembly -- must already exist, so for a multi-level hierarchy
+        create/load leaf templates first):
             {
               "element_name": str,               # required
               "quantity": int,                    # default 1
               "description": str,                 # default ""
               "component": str | dict,            # see _resolve_component()
             }
+        or:
+            {
+              "element_name": str,
+              "quantity": int,
+              "description": str,
+              "child_template": str,               # name of an existing DesignTemplate
+            }
 
         Returns a summary dict: {"template", "template_created", "elements": [...]}.
+        Raises ValueError if an element gives both or neither of
+        "component"/"child_template". A ValidationError propagates from
+        DesignTemplateElement.save() if a "child_template" element would
+        make a template (in)directly nest itself, or if the referenced
+        template doesn't share this one's project and owner_group (see
+        DesignTemplate.can_nest) -- so a YAML file whose templates aren't
+        loaded leaf-first with matching project/owner_group at every
+        level will fail loudly here rather than silently creating an
+        inconsistent nesting.
         """
         m = _m()
 
@@ -211,6 +241,10 @@ class DesignClient:
             from django.contrib.auth.models import User
             owner_user = User.objects.get(username=owner_username)
 
+        product = None
+        if product_component is not None:
+            product, _ = self._resolve_component(product_component, default_project=project)
+
         template, template_created = m.DesignTemplate.objects.get_or_create(
             name=name,
             defaults={
@@ -218,28 +252,52 @@ class DesignClient:
                 "description": description,
                 "owner_group": owner_group,
                 "owner_user": owner_user,
+                "product_component": product,
             },
         )
 
         element_results = []
         for el in elements:
-            component, component_created = self._resolve_component(
-                el["component"], default_project=project,
-            )
-            tpl_element, element_created = m.DesignTemplateElement.objects.get_or_create(
-                template=template, element_name=el["element_name"],
-                defaults={
-                    "component": component,
-                    "quantity": el.get("quantity", 1),
-                    "description": el.get("description", ""),
-                },
-            )
-            element_results.append({
-                "element_name": el["element_name"],
-                "component": component.name,
-                "component_created": component_created,
-                "element_created": element_created,
-            })
+            has_component = "component" in el and el["component"] is not None
+            has_child     = "child_template" in el and el["child_template"] is not None
+            if has_component == has_child:
+                raise ValueError(
+                    f"Element {el.get('element_name')!r} of template {name!r} must give "
+                    f"exactly one of 'component' or 'child_template', not both or neither."
+                )
+            if has_child:
+                child_template = m.DesignTemplate.objects.get(name=el["child_template"])
+                tpl_element, element_created = m.DesignTemplateElement.objects.get_or_create(
+                    template=template, element_name=el["element_name"],
+                    defaults={
+                        "child_template": child_template,
+                        "quantity": el.get("quantity", 1),
+                        "description": el.get("description", ""),
+                    },
+                )
+                element_results.append({
+                    "element_name": el["element_name"],
+                    "child_template": child_template.name,
+                    "element_created": element_created,
+                })
+            else:
+                component, component_created = self._resolve_component(
+                    el["component"], default_project=project,
+                )
+                tpl_element, element_created = m.DesignTemplateElement.objects.get_or_create(
+                    template=template, element_name=el["element_name"],
+                    defaults={
+                        "component": component,
+                        "quantity": el.get("quantity", 1),
+                        "description": el.get("description", ""),
+                    },
+                )
+                element_results.append({
+                    "element_name": el["element_name"],
+                    "component": component.name,
+                    "component_created": component_created,
+                    "element_created": element_created,
+                })
 
         return {
             "template": name,
@@ -260,15 +318,22 @@ class DesignClient:
         single template):
             template:
               name: str
-              project: str            # default "ePIC"
+              project: str                 # default "ePIC"
               description: str
-              owner_group: str        # optional Group name
-              owner_user: str         # optional Django username
+              owner_group: str             # optional Group name
+              owner_user: str              # optional Django username
+              product_component: str|dict  # optional -- see create_template()
             elements:
               - element_name: str
-                quantity: int          # default 1
+                quantity: int               # default 1
                 description: str
-                component: str | dict  # see _resolve_component()
+                component: str | dict       # see _resolve_component()
+              # or, for a nested sub-assembly (must already exist -- list
+              # leaf templates first):
+              - element_name: str
+                quantity: int
+                description: str
+                child_template: str         # name of an earlier template in this file
 
         Returns a list of create_template()'s summary dicts, one per
         template document.
@@ -289,6 +354,7 @@ class DesignClient:
                 description=tpl.get("description", ""),
                 owner_group_name=tpl.get("owner_group"),
                 owner_username=tpl.get("owner_user"),
+                product_component=tpl.get("product_component"),
                 elements=doc.get("elements", []),
             ))
         return results
@@ -305,8 +371,12 @@ class DesignClient:
 
         Raises PermissionError if self.user isn't a superuser, or
         RuntimeError if the template is locked (at least one Design has
-        been instantiated from it). Returns {"template": name, "deleted":
-        True} on success.
+        been instantiated from it) or is referenced as another template's
+        child_template placeholder (child_template is PROTECTed at the DB
+        level for exactly this reason -- checked explicitly here so this
+        raises a clear RuntimeError instead of an unhandled
+        django.db.models.deletion.ProtectedError). Returns {"template":
+        name, "deleted": True} on success.
         """
         if self.user is None or not self.user.is_superuser:
             who = self.user.username if self.user else "<anonymous>"
@@ -319,34 +389,43 @@ class DesignClient:
                 f"Design template {template.name!r} is locked -- "
                 f"{template.designs.count()} design(s) have been instantiated from it."
             )
+        if template.parent_elements.exists():
+            referencing = ", ".join(
+                sorted({el.template.name for el in template.parent_elements.select_related("template")})
+            )
+            raise RuntimeError(
+                f"Design template {template.name!r} is nested as a sub-template inside: "
+                f"{referencing}. Remove that placeholder (or the referencing template) first."
+            )
         template_name = template.name
         template.delete()
         return {"template": template_name, "deleted": True}
 
     def template_bom(self, template_name: str, _depth: int = 0, _max: int = MAX_BOM_DEPTH) -> list[dict]:
         """
-        Recursive parts explosion for a flat DesignTemplate: for each
-        element, if a DesignTemplate exists with the SAME NAME as the
-        element's Component, recurse into it (see the naming-convention
-        note above the "Design templates" section); otherwise it's a leaf
-        part.
+        Recursive parts explosion for a DesignTemplate, same shape idea as
+        DesignClient.bom(): each row has "type" ("COMPONENT" or
+        "TEMPLATE") and "ref" (the component's or nested template's name).
+        A TEMPLATE row recurses into that sub-template's own elements; a
+        COMPONENT row is a leaf and also carries "model_number".
         """
         if _depth > _max:
             return [{"error": "max depth exceeded"}]
-        m = _m()
         rows = []
         for tel in self.template_elements(template_name):
             entry = {
                 "element": tel.element_name,
-                "component": tel.component.name,
-                "model_number": tel.component.model_number,
+                "type": tel.element_type(),
                 "qty": tel.quantity,
                 "description": tel.description,
             }
-            sub_template = m.DesignTemplate.objects.filter(name=tel.component.name).first()
-            entry["children"] = (
-                self.template_bom(sub_template.name, _depth + 1, _max) if sub_template else []
-            )
+            if tel.child_template_id:
+                entry["ref"] = tel.child_template.name
+                entry["children"] = self.template_bom(tel.child_template.name, _depth + 1, _max)
+            else:
+                entry["ref"] = tel.component.name
+                entry["model_number"] = tel.component.model_number
+                entry["children"] = []
             rows.append(entry)
         return rows
 

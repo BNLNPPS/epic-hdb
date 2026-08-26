@@ -282,74 +282,95 @@ just a UI check.
 | `name` | Globally unique |
 | `description` | Free-text |
 | `project` | e.g. `ePIC` |
+| `product_component` | FK → `Component`, nullable — the catalog entry for one physically completed instance of this template's assembly (e.g. the "BTOF Stavelet" template's `product_component` is the "BTOF Stavelet" `Component`), so it can be tracked as inventory once built. Independent of nesting — see below. |
 | *(OwnedModel)* | Ownership + timestamps |
+| `nesting_levels` | Computed property, not a DB column — depth of nested sub-templates beneath this one (1 = flat, every placeholder a leaf component) |
 
 **`DesignTemplateElement`** — one placeholder line.
 
 | Field | Description |
 |-------|-------------|
 | `element_name` | Unique within the template |
-| `component` | FK → `Component`, **required** — a template placeholder always names a component *type*, never a specific instance |
-| `quantity` | Number needed |
+| `component` | FK → `Component`, nullable — set for a leaf placeholder |
+| `child_template` | FK → `DesignTemplate`, nullable — set for a nested sub-assembly placeholder (**real nesting**, mirrors `child_design`) |
+| `quantity` | Number needed (applies to either kind) |
 
-#### The key structural difference: templates can't nest
+Exactly one of `component` or `child_template` is set per element
+(`element_type()` returns `"COMPONENT"` or `"TEMPLATE"` based on which),
+enforced three ways: `DesignTemplateElement.clean()`/`save()` (a friendly
+`ValidationError` on every write path — the web UI, `hdb_client`, direct
+ORM use), and a database `CheckConstraint` as a backstop against anything
+that bypasses `save()` (`bulk_create`, raw SQL).
 
-`DesignElement` can point at another `Design` (`child_design`) — real,
-unlimited-depth nesting is native to the schema. `DesignTemplateElement`
-has **no equivalent `child_template` field**: its `component` FK is required
-and always points at a `Component`, never at another `DesignTemplate`. A
-template can only ever say "this slot needs N of component X" — never "this
-slot needs another sub-template."
+#### Templates nest, structurally identically to Designs
+
+`DesignTemplateElement.child_template` mirrors `DesignElement.child_design`
+exactly — real, schema-native, unlimited-depth nesting. The two models are
+now structurally parallel:
 
 | | `Design` | `DesignTemplate` |
 |---|---|---|
 | Represents | A real assembly, instantiated or in progress | A reusable pattern, not a design itself |
 | Element model | `DesignElement` | `DesignTemplateElement` |
-| An element can point at | A `Component` **or** another `Design` | A `Component` **only** |
-| Nests its own kind? | Yes, natively (`child_design`) | No — no schema field for it |
-| Physical tracking | `DesignElementInstance` pins real `ComponentInstance`s into slots | None — always abstract |
+| An element can point at | A `Component` **or** another `Design` | A `Component` **or** another `DesignTemplate` |
+| Nests its own kind? | Yes, natively (`child_design`) | Yes, natively (`child_template`) |
+| Physical tracking | `DesignElementInstance` pins real `ComponentInstance`s into slots | None on the placeholder itself — but `product_component` lets the *template as a whole* have a trackable product |
+| Can reference itself, at any depth? | No restriction in the schema (not applicable — nothing instantiates into itself) | **Never** — `DesignTemplateElement.save()` rejects a `child_template` link that would let a template (in)directly nest itself |
+| Can nest a template from a different project or owner_group? | Not applicable | **Never** — `child_template` must share both `project` and `owner_group` with its parent template (`DesignTemplate.can_nest`) |
 | Locking | None of its own | **Locked** once any `Design` references it as `template` |
-| Who can delete it | Any `owner_group` member, or a superuser | **Superuser only**, and only while unlocked |
-
-**The workaround**, used throughout `data/btof_stave_templates.yaml`: model
-each intermediate assembly level as **both its own catalog `Component` and
-its own `DesignTemplate` of the identical name**. Any BOM-style traversal
-(the web UI's template BOM, or `hdb_client`'s `template_bom()`) can then
-follow that name match to recurse — for each element, it checks whether a
-`DesignTemplate` exists whose `name` equals the element's `component.name`,
-and if so, descends into it. This achieves the same effect as `child_design`
-nesting, through a naming convention instead of a schema field:
+| Who can delete it | Any `owner_group` member, or a superuser | **Superuser only**, only while unlocked, and only while not nested inside another template (`child_template` is `PROTECT`ed) |
 
 ```
 DesignTemplate "BTOF Stave"
-  └─ element "Half-Stave Assemblies"  x144  → Component "BTOF Half-Stave"
-       │  (a DesignTemplate of the same name exists, so traversal recurses)
-       └─ DesignTemplate "BTOF Half-Stave"
-            ├─ element "Stavelet Modules"  x8  → Component "BTOF Stavelet"
-            │    └─ DesignTemplate "BTOF Stavelet"
-            │         ├─ "AC-LGAD Sensors"    x4 → Component "AC-LGAD Sensor"        (leaf)
-            │         ├─ "FCFD Readout ASICs" x4 → Component "FCFDv2 Readout"        (leaf)
-            │         ├─ "Interposer Boards"  x4 → Component "BTOF Interposer Board" (leaf)
-            │         └─ "Flex Cable (FPC)"   x1 → Component "BTOF Flex Cable (FPC)" (leaf)
-            ├─ "Peripheral Board"      x1 → Component "BTOF Peripheral Board"       (leaf)
-            └─ "Cooling Pipe Segment"  x1 → Component "BTOF Cooling Pipe Segment"   (leaf)
+  └─ element "Half-Stave Assemblies"  x144  → child_template: DesignTemplate "BTOF Half-Stave"
+       ├─ element "Stavelet Modules"  x8  → child_template: DesignTemplate "BTOF Stavelet"
+       │    ├─ "AC-LGAD Sensors"    x4 → component: "AC-LGAD Sensor"        (leaf)
+       │    ├─ "FCFD Readout ASICs" x4 → component: "FCFDv2 Readout"        (leaf)
+       │    ├─ "Interposer Boards"  x4 → component: "BTOF Interposer Board" (leaf)
+       │    └─ "Flex Cable (FPC)"   x1 → component: "BTOF Flex Cable (FPC)" (leaf)
+       │    (product_component: "BTOF Stavelet" -- one built+QA'd stavelet is trackable inventory)
+       ├─ "Peripheral Board"      x1 → component: "BTOF Peripheral Board"       (leaf)
+       └─ "Cooling Pipe Segment"  x1 → component: "BTOF Cooling Pipe Segment"   (leaf)
+       (product_component: "BTOF Half-Stave")
 ```
 
-A component is a "leaf" only because no `DesignTemplate` happens to share its
-name — there's no explicit flag; it's inferred fresh on every traversal.
-This has a real benefit: **every intermediate assembly (a stavelet, a
-half-stave, a stave) is independently serial-trackable as its own
-`ComponentInstance`** once actually built, same as any leaf part — a schema
-that just added a bare `child_template` field wouldn't give you that, since
-an abstract sub-template reference has nothing to attach a serial number to.
+Beyond the cycle rule, a `child_template` must also share the parent
+template's `project` and `owner_group` (`DesignTemplate.can_nest`,
+enforced the same three-layer way — the "Add Placeholder" dropdown only
+ever *offers* in-scope templates, and `DesignTemplateElement.clean()` is
+the actual enforcement against a direct POST or `hdb_client` call).
+Nesting a sub-assembly from an unrelated project has no physical meaning,
+and the group that owns a template is responsible for everything
+physically built into it at every level — a BTOF assembly can't be built
+out of a BEMC group's sub-assembly. There's no DB-level backstop for
+either check (both compare across rows, which a `CheckConstraint` can't
+do), same as the cycle rule.
+
+`product_component` is what preserves the earlier flat-template scheme's
+one real advantage — every intermediate assembly is independently
+serial-trackable as its own `ComponentInstance` once actually built — while
+keeping it a deliberate, explicit choice per template rather than an
+implicit side effect of a naming coincidence. A template with no
+`product_component` set is purely a nesting/BOM concept with nothing to
+physically instantiate on its own (e.g. a top-level "BTOF Stave" template
+might have none, if a whole stave is never itself installed into anything
+larger and tracked as one serialized unit).
 
 #### Instantiation and locking
 
 A `DesignTemplate` starts **unlocked**: any member of its `owner_group` (or
 a superuser) can add, remove, or resize its placeholders. Instantiating it —
 via "New from Template" on the Designs page, or programmatically — creates a
-real `Design` with `template` set, and one `DesignElement` copied from each
-`DesignTemplateElement` at that moment.
+real `Design` with `template` set and one `DesignElement` per placeholder.
+For a `TEMPLATE`-type placeholder, instantiation **recurses**: a child
+`Design` is auto-instantiated from that nested template the same way, and
+the new `DesignElement`'s `child_design` points at it — so a multi-level
+template produces a fully wired-up multi-level `Design` tree on the first
+instantiation, not empty slots to fill in by hand later. `quantity` on a
+`TEMPLATE`-type element means what it already means for `child_design` in a
+hand-built `Design`: one exemplar child counted that many times when a BOM
+is walked (`DesignBOMView.walk()` / `_build_bom()`), not that many separate
+`Design` rows.
 
 The instant **any** `Design` exists with that `template`, the template
 **locks**: every editing and deletion control disappears, checked
@@ -361,17 +382,11 @@ and it becomes editable (and deletable) again immediately. `Design` deletion
 itself carries none of these restrictions.
 
 **Deleting a template** is further restricted to **superusers only** (even
-more restrictive than editing, which any `owner_group` member can do) —
-because removing a template removes it for every group member at once. See
-`client/README.md` for the exact CLI/API/web-UI mechanics and real output.
-
-One nuance worth internalizing: deleting an **intermediate-level** template
-in a multi-level set (e.g. "BTOF Stavelet" while "BTOF Half-Stave" and "BTOF
-Stave" still exist) is not an error. The next BOM traversal simply finds no
-matching `DesignTemplate` for that element and treats it as a leaf instead —
-the parent template stays otherwise intact, just one level shallower at that
-branch. Re-loading the original YAML (idempotent) restores the deleted level
-exactly and re-enables the recursion.
+more restrictive than editing, which any `owner_group` member can do), and
+is blocked while it's referenced as another template's `child_template`
+placeholder (`PROTECT`ed at the database level — remove the placeholder, or
+delete the referencing template, first). See `client/README.md` for the
+exact CLI/API/web-UI mechanics and real output.
 
 ---
 
@@ -586,10 +601,12 @@ Group ──► TechnicalSystem ──► Component ──► ComponentInstance
                                    ├─► LogEntry        (FK: component)
                                    └─► LogEntry        (FK: component_instance)
 
-DesignTemplate ──► DesignTemplateElement ──► Component
-      │   (flat only — no template-to-template nesting; see Domain 3)
+DesignTemplate ──► DesignTemplateElement ──┬─► Component                       (leaf)
+      │                    │               └─► DesignTemplate (child_template)  (real nesting)
+      │                    │
+      │                    (exactly one of the two, never neither/both; never a cycle)
       │
-      │   instantiate
+      │   instantiate (recurses into child_template placeholders too)
       ▼
     Design ──► DesignElement ──┬─► Component                 (leaf)
       │             │          └─► Design (child_design)      (real nesting)
@@ -622,25 +639,22 @@ inventory.
 domains with no duplication of schema, matching the CDB's philosophy that
 any object can carry any property.
 
-**`DesignElement` dual-target pattern** — each element sets either
-`component` (leaf) or `child_design` (sub-assembly), never both. This
-enables unlimited BOM nesting depth for real `Design`s.
-
-**Deliberately flat `DesignTemplate`s, with a naming-convention workaround
-for multi-level hierarchies** — rather than adding a `child_template` field
-to mirror `child_design`, a template placeholder can only reference a
-catalog `Component`. Multi-level template hierarchies are represented by
-giving each intermediate assembly level both its own `Component` and its
-own identically-named `DesignTemplate` — see [Domain 3](#domain-3--designs)
-for the full reasoning, including why this also makes every intermediate
-assembly independently serial-trackable, which a schema-level
-`child_template` field wouldn't.
+**`DesignElement` / `DesignTemplateElement` dual-target pattern** — each
+element sets either `component` (leaf) or `child_design`/`child_template`
+(sub-assembly), never both. This enables unlimited BOM nesting depth for
+both real `Design`s and, structurally identically, `DesignTemplate`s — see
+[Domain 3](#domain-3--designs) for the full reasoning, the self-nesting
+cycle prevention, and how `product_component` keeps every intermediate
+assembly level independently serial-trackable without tying that to how
+the placeholder is nested.
 
 **Superuser-only template deletion** — editing an unlocked `DesignTemplate`
 is open to any `owner_group` member (matching every other write in the
 system), but *deleting* one is superuser-only. Removing a template removes
 it for every group member at once, not just the deleter's own records — a
-deliberately stricter bar than the usual ownership rule.
+deliberately stricter bar than the usual ownership rule. Deletion is also
+blocked while the template is nested inside another one (`child_template`
+is `PROTECT`ed).
 
 **QuerySet-returning client methods** — `hdb_client`'s domain clients return
 lazy Django QuerySets wherever possible. Callers can chain additional

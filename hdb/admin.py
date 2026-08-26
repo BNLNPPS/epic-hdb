@@ -137,7 +137,11 @@ class ComponentInstanceAdmin(admin.ModelAdmin):
 
 class DesignTemplateElementInline(admin.TabularInline):
     model = DesignTemplateElement; extra = 0
-    fields = ("element_name", "component", "quantity", "description")
+    # fk_name required: DesignTemplateElement now has two FKs to
+    # DesignTemplate (template, child_template) -- this inline is anchored
+    # to the *owning* template, not the (optional) nested one.
+    fk_name = "template"
+    fields = ("element_name", "component", "child_template", "quantity", "description")
 
 
 @admin.register(DesignTemplate)
@@ -145,10 +149,14 @@ class DesignTemplateAdmin(admin.ModelAdmin):
     list_display    = ("pk", "name", "project", "placeholder_count", "owner_group")
     list_filter     = ("project", "owner_group")
     search_fields   = ("name", "description")
-    readonly_fields = ("pk", "created_on", "modified_on")
+    # nesting_levels is a recursive property (walks the child_template FK
+    # chain), not a DB column -- fine to compute once for a single object's
+    # change form, deliberately kept out of list_display where it would run
+    # once per row on every paginated admin list page.
+    readonly_fields = ("pk", "created_on", "modified_on", "nesting_levels")
     inlines         = [DesignTemplateElementInline]
     fieldsets = (
-        ("Identity",  {"fields": ("pk", "name", "description", "project")}),
+        ("Identity",  {"fields": ("pk", "name", "description", "project", "nesting_levels", "product_component")}),
         ("Ownership", {"fields": ("owner_user", "owner_group", "group_writeable", "created_by", "created_on", "modified_by", "modified_on"), "classes": ("collapse",)}),
     )
 

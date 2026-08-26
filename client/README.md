@@ -239,18 +239,28 @@ client.designs.summary("BEMC tower")
 ### Design & Design Template architecture — see the top-level README
 
 `Design`/`DesignElement` and `DesignTemplate`/`DesignTemplateElement` are
-two related but structurally distinct models: `Design` supports real,
-unlimited-depth nesting (`child_design`) and physical instance tracking;
-`DesignTemplate` is deliberately flat (no `child_template` field — every
-placeholder must name a real catalog `Component`), locks once any `Design`
-is instantiated from it, and can only be *deleted* by a superuser while
-still unlocked.
+two structurally parallel models: `Design` supports real, unlimited-depth
+nesting via `DesignElement.child_design`, and physical instance tracking;
+`DesignTemplate` supports the equivalent nesting via
+`DesignTemplateElement.child_template` -- a placeholder is either a leaf
+(`component`, a real catalog `Component`) or a nested sub-assembly
+(`child_template`, another `DesignTemplate`), exactly one of the two, ever.
+A template can never nest itself, directly or through further levels, and
+a `child_template` must share its parent's `project` and `owner_group` --
+both enforced unconditionally in `DesignTemplateElement.save()`, so a
+YAML file's templates must be loaded leaf-first with matching
+project/owner_group at every level (see `load_templates_from_yaml`'s
+docstring). Instantiating a
+template that contains nested placeholders recursively instantiates a
+child `Design` for each one too, so a multi-level template produces a
+fully wired-up multi-level `Design` immediately, not empty slots to fill
+in by hand. A template locks once any `Design` is instantiated from it,
+and can only be *deleted* by a superuser while unlocked AND not nested
+inside another template's placeholder (`child_template` is `PROTECT`ed).
 
 **The full conceptual explanation — the `Design` vs. `DesignTemplate`
-comparison, why templates can't nest and the flat-template-plus-matching-
-`Component`-name workaround (with the worked BTOF Stave → Half-Stave →
-Stavelet example), the instantiation/locking lifecycle, and the
-"deleting an intermediate-level template is safe, not an error" nuance —
+comparison, the worked BTOF Stave → Half-Stave → Stavelet example, the
+instantiation/locking lifecycle, and the self-nesting-cycle prevention --
 now lives in the top-level [`README.md`, under "Domain 3 —
 Designs"](../README.md#domain-3--designs). That's the single authoritative
 place for it; this file only covers how to *drive* that model through
@@ -271,9 +281,12 @@ client.designs.load_templates_from_yaml("data/btof_stave_templates.yaml")
 
 client.designs.template_bom("BTOF Stave")
 # -> recursive parts explosion, same shape idea as designs.bom():
-#    [{"element": "Half-Stave Assemblies", "component": "BTOF Half-Stave",
-#      "model_number": "BTOF-HALFSTAVE-R1", "qty": 144, "description": "...",
-#      "children": [ ... recurses into the BTOF Half-Stave template ... ]}, ...]
+#    [{"element": "Half-Stave Assemblies", "type": "TEMPLATE", "ref": "BTOF Half-Stave",
+#      "qty": 144, "description": "...",
+#      "children": [ ... recurses into the BTOF Half-Stave template ... ]},
+#     {"element": "Carbon Honeycomb Support", "type": "COMPONENT",
+#      "ref": "BTOF Carbon Honeycomb Support", "model_number": "BTOF-SUPPORT-01",
+#      "qty": 1, "description": "...", "children": []}]
 
 client.designs.all_templates()                 # queryset of DesignTemplate
 client.designs.get_template(name="BTOF Stave")
@@ -292,8 +305,8 @@ there's no requirement that the acting user belong to that group (unlike
 
 YAML file format (a single template document, or `templates: [...]` for
 several — loaded top to bottom, so for a multi-level hierarchy list leaf
-templates first, since a higher level's element needs the level below's
-Component to already exist or be creatable):
+templates first: a `child_template` element needs the level below's
+`DesignTemplate` to already exist):
 
 ```yaml
 templates:
@@ -303,6 +316,11 @@ templates:
       owner_group: BTOF          # optional Group name
       owner_user: crafts         # optional Django username
       description: "..."
+      product_component:         # optional -- catalog Component for one
+        name: "BTOF Stavelet"    # physically completed instance of this
+        model_number: "BTOF-STAVELET-R1"  # assembly (see create_template()).
+        technical_system: "BTOF-Mechanical"    # Same str|dict shape as an
+                                                # element's "component" below.
     elements:
       - element_name: "AC-LGAD Sensors"
         quantity: 4               # default 1
@@ -317,6 +335,17 @@ templates:
           technical_system: "BTOF-Mechanical"   # number -- both are how a
           technical_system_group: BTOF          # physical instance traces
                                                  # back to its catalog entry.
+
+  - template:
+      name: "BTOF Half-Stave"
+      # ...
+    elements:
+      - element_name: "Stavelet Modules"
+        quantity: 8
+        description: "..."
+        child_template: "BTOF Stavelet"   # nests the template above --
+                                           # must already exist/have been
+                                           # loaded earlier in this file.
 ```
 
 See `data/btof_stave_templates.yaml` for the full, real worked example: the
@@ -335,18 +364,18 @@ Template 'BTOF Stavelet': created
   - Interposer Boards: BTOF Interposer Board (component created) [created]
   - Flex Cable (FPC): BTOF Flex Cable (FPC) (component created) [created]
 Template 'BTOF Half-Stave': created
-  - Stavelet Modules: BTOF Stavelet (component created) [created]
+  - Stavelet Modules: [template] BTOF Stavelet [created]
   ...
 Template 'BTOF Stave': created
-  - Half-Stave Assemblies: BTOF Half-Stave (component created) [created]
+  - Half-Stave Assemblies: [template] BTOF Half-Stave [created]
   - Carbon Honeycomb Support: BTOF Carbon Honeycomb Support (component created) [created]
 
 $ python client/hdb.py bom-template "BTOF Stave"
 Carbon Honeycomb Support  x1  -> BTOF Carbon Honeycomb Support (BTOF-SUPPORT-01)
-Half-Stave Assemblies  x144  -> BTOF Half-Stave (BTOF-HALFSTAVE-R1)
+Half-Stave Assemblies  x144  -> [template] BTOF Half-Stave
   Cooling Pipe Segment  x1  -> BTOF Cooling Pipe Segment (BTOF-COOL-01)
   Peripheral Board  x1  -> BTOF Peripheral Board (BTOF-PERIPH-01)
-  Stavelet Modules  x8  -> BTOF Stavelet (BTOF-STAVELET-R1)
+  Stavelet Modules  x8  -> [template] BTOF Stavelet
     AC-LGAD Sensors  x4  -> AC-LGAD Sensor (AC-LGAD-v1)
     FCFD Readout ASICs  x4  -> FCFDv2 Readout (FCFDv2)
     Flex Cable (FPC)  x1  -> BTOF Flex Cable (FPC) (BTOF-FPC-01)
@@ -365,7 +394,12 @@ A `DesignTemplate` can be deleted outright — in the web UI (the "Delete
 Template" button on its detail page) or via `client.designs.delete_template()`
 / `hdb.py delete-template` — but only while it's **unlocked**, i.e. no
 `Design` has ever been instantiated from it (`template.designs.exists()`
-is `False`). This is the same immutability rule that freezes a template's
+is `False`), **and** not nested as a sub-template inside another
+template's placeholder (`template.parent_elements.exists()` is `False` --
+`DesignTemplateElement.child_template` is `PROTECT`ed at the database
+level for exactly this reason: deleting it out from under a live
+`child_template` reference would leave that placeholder pointing at
+nothing). This is the same immutability rule that freezes a template's
 placeholders once it's been used (see the ["Domain 3 — Designs" section of
 the top-level README](../README.md#domain-3--designs) for the full
 reasoning): a template that already backs a real, instantiated design can't
@@ -392,11 +426,15 @@ Deleted template 'BTOF Stavelet'.
 ```
 
 `--yes` skips the interactive confirmation prompt (useful for scripting).
-Deleting a template that's referenced as a "sub-template" by a
-higher-level template (via the name-matching convention above) is fine —
-`template_bom()` simply treats that element as a leaf on its next run,
-the same way it already does for any element whose component name doesn't
-match an existing template.
+Deleting a template that's still referenced as another template's
+`child_template` placeholder now fails with a clear error instead — remove
+that placeholder (`template_element_delete` / `template.elements...delete()`)
+or delete the referencing template first:
+
+```
+$ python client/hdb.py --user maxim delete-template "BTOF Stavelet" --yes
+Error: Design template 'BTOF Stavelet' is nested as a sub-template inside: BTOF Half-Stave. Remove that placeholder (or the referencing template) first.
+```
 
 ```python
 client.designs.delete_template(name="BTOF Stavelet")

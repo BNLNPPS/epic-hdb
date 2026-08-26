@@ -6,6 +6,7 @@ Groups use Django's built-in auth.Group.
 """
 
 import uuid
+from django.core.exceptions import ValidationError
 from django.db import models
 from django.contrib.auth.models import User, Group
 from django.utils import timezone
@@ -379,20 +380,46 @@ class ComponentInstance(OwnedModel):
 # Domain 3 — Designs
 # ---------------------------------------------------------------------------
 
+# DesignTemplateElement.child_template lets one template nest another as a
+# placeholder, mirroring how DesignElement.child_design does the same for
+# real Designs (see that model). A template can never contain itself, at any
+# depth -- it's a real physical constraint, not just a data-hygiene rule: an
+# assembly cannot be one of its own sub-assemblies. DesignTemplateElement.save()
+# enforces this unconditionally (every write path -- web view, admin,
+# hdb_client, a raw script -- goes through it), and DesignTemplate.nesting_levels
+# below is bounded by the same TEMPLATE_NESTING_MAX_DEPTH as read-time
+# defense-in-depth, in case a row is ever created by something that bypasses
+# .save() entirely (bulk_create, raw SQL).
+TEMPLATE_NESTING_MAX_DEPTH = 10
+
+
 class DesignTemplate(OwnedModel):
     """
-    Reusable blueprint for a Design. Template elements reference catalog
-    Components as *placeholders* -- they say "this assembly needs 4 SiPMs",
-    not "these four specific SiPMs". When a user instantiates a template,
-    a real Design is created with one DesignElement per placeholder; the
+    Reusable blueprint for a Design. Template elements reference either a
+    catalog Component or another DesignTemplate as *placeholders* -- they
+    say "this assembly needs 4 SiPMs" or "this assembly needs 144
+    Half-Staves", not specific serialized items. When a user instantiates a
+    template, a real Design is created with one DesignElement per
+    placeholder (recursively instantiating a child Design for every nested
+    sub-template placeholder too -- see design_list in views_web.py); the
     editing tools on the design detail page then let the owning group
-    replace each placeholder with an actual ComponentInstance from the
+    replace each leaf placeholder with an actual ComponentInstance from the
     inventory as the physical assembly is built.
     """
     id = models.CharField(max_length=36, primary_key=True, editable=False)
     name        = models.CharField(max_length=256, unique=True)
     description = models.TextField(blank=True)
     project     = models.CharField(max_length=64, blank=True, default="ePIC")
+    product_component = models.ForeignKey(
+        Component, null=True, blank=True, on_delete=models.SET_NULL, related_name="product_of_templates",
+        help_text="Catalog Component representing one built/assembled instance of this "
+                   "template -- e.g. the 'BTOF Stavelet' template's product_component is the "
+                   "'BTOF Stavelet' Component, so a physically completed stavelet can be "
+                   "tracked as a ComponentInstance like any other part. Independent of "
+                   "nesting: set this whether or not this template is ALSO used as another "
+                   "template's child_template placeholder -- the two are unrelated concerns "
+                   "(one is 'what do I contain', the other is 'what am I, once built').",
+    )
 
     def save(self, *args, **kwargs):
         if not self.id:
@@ -402,26 +429,213 @@ class DesignTemplate(OwnedModel):
     def __str__(self):
         return self.name
 
+    def descendant_template_ids(self, _seen=None):
+        """Set of every DesignTemplate id reachable from this template by
+        following child_template edges, at any depth (this template's own
+        id is never included). Used by would_create_cycle() to check
+        whether a proposed child_template link would let this template
+        reach itself again.
+
+        `_seen` guards recursion: bounded by TEMPLATE_NESTING_MAX_DEPTH and
+        by never re-descending into an id already visited on this path, so
+        this can't loop forever even if a cycle somehow already exists
+        (see the module comment above -- should be impossible via .save(),
+        this is the read-time backstop).
+        """
+        seen = _seen if _seen is not None else {self.pk}
+        if len(seen) > TEMPLATE_NESTING_MAX_DEPTH:
+            return set()
+        result = set()
+        for element in self.elements.select_related("child_template"):
+            child_id = element.child_template_id
+            if child_id and child_id not in seen:
+                result.add(child_id)
+                result |= element.child_template.descendant_template_ids(seen | {child_id})
+        return result
+
+    def would_create_cycle(self, candidate_child):
+        """True if adding `candidate_child` as a (direct, or via further
+        nesting, indirect) sub-template of this template would let this
+        template reach itself again -- i.e. candidate_child IS this
+        template, or this template already appears somewhere in
+        candidate_child's own descendant tree. A physical assembly can
+        never contain itself at any depth; callers (DesignTemplateElement
+        .save(), the "Add Placeholder" view) must check this BEFORE saving
+        a child_template link, not just guard against it at read time."""
+        if candidate_child.pk == self.pk:
+            return True
+        return self.pk in candidate_child.descendant_template_ids()
+
+    def can_nest(self, candidate_child):
+        """True if `candidate_child` is a legal sub-template placeholder for
+        this template: not a cycle (see would_create_cycle), same project
+        (nesting a sub-assembly from an unrelated project has no physical
+        meaning -- `project` is a real, load-bearing field elsewhere too,
+        e.g. Component's name+project uniqueness), and same owner_group
+        (the group that owns a template is responsible for everything
+        physically built into it, at every level -- a BTOF assembly can't
+        be built out of a BEMC group's sub-assembly). All three are
+        independent reasons to reject a candidate; this is the single
+        place that combines them, used by both the "Add Placeholder"
+        dropdown (UI convenience) and DesignTemplateElement.clean() (the
+        actual enforcement -- a dropdown is trivially bypassable)."""
+        if self.would_create_cycle(candidate_child):
+            return False
+        if candidate_child.project != self.project:
+            return False
+        if candidate_child.owner_group_id != self.owner_group_id:
+            return False
+        return True
+
+    @property
+    def nesting_levels(self):
+        """Depth of the nested sub-template structure this template
+        describes, via DesignTemplateElement.child_template. A template
+        made up entirely of leaf components (no placeholder that nests
+        another template) returns 1; each additional level of sub-template
+        nesting beneath it adds 1.
+
+        Bounded by TEMPLATE_NESTING_MAX_DEPTH, plus a `seen` set (by
+        template id) as the same read-time defense-in-depth described in
+        the module comment above -- write-time validation should already
+        make a cycle impossible.
+        """
+        def _depth(template, seen):
+            if template.pk in seen or len(seen) >= TEMPLATE_NESTING_MAX_DEPTH:
+                return 0
+            seen = seen | {template.pk}
+            deepest_child = 0
+            for element in template.elements.select_related("child_template"):
+                if element.child_template_id:
+                    deepest_child = max(deepest_child, _depth(element.child_template, seen))
+            return 1 + deepest_child
+
+        return _depth(self, set())
+
+    def parent_templates(self):
+        """Distinct DesignTemplates that reference this one as a
+        child_template placeholder in one (or more) of their elements,
+        ordered by name for deterministic display. Zero parents means
+        this template is a nesting root; more than one means this
+        template is shared -- nested as a sub-assembly inside more than
+        one different parent template (the "diamond" shape explicitly
+        allowed by would_create_cycle, e.g. a common bracket template
+        used by two otherwise-unrelated assemblies)."""
+        parent_ids = self.parent_elements.values_list("template_id", flat=True).distinct()
+        return list(DesignTemplate.objects.filter(pk__in=parent_ids).order_by("name"))
+
+    def breadcrumb_ancestors(self, _seen=None):
+        """This template's ancestor chain, root-first, as a list of
+        {'template': DesignTemplate, 'alternatives': [DesignTemplate, ...]}
+        dicts -- used to render the template detail page's breadcrumb.
+
+        Each entry's 'template' is one ancestor on the path from a
+        nesting root down to (but not including) this template; its
+        'alternatives' are every immediate parent of the NEXT template
+        down that same path (that next template being either the
+        following entry, or this template itself for the last entry) --
+        i.e. every other template that could legally occupy that same
+        breadcrumb slot. Nesting is a DAG, not strictly a tree (see
+        parent_templates), so there is no single canonical path in
+        general; where a template has more than one immediate parent,
+        one is picked deterministically (alphabetically first) to
+        continue the walk, and the full set is carried along as
+        'alternatives' so the UI can offer the others as one-click
+        detours rather than silently hiding them.
+
+        Bounded by TEMPLATE_NESTING_MAX_DEPTH, plus a `seen` set, as the
+        same read-time defense-in-depth used elsewhere in this class --
+        write-time validation (would_create_cycle) should already make a
+        cycle impossible, so this is a backstop, not the enforcement.
+        """
+        seen = _seen if _seen is not None else {self.pk}
+        if len(seen) > TEMPLATE_NESTING_MAX_DEPTH:
+            return []
+        parents = self.parent_templates()
+        if not parents:
+            return []
+        chosen = parents[0]
+        if chosen.pk in seen:
+            return [{"template": chosen, "alternatives": parents}]
+        return chosen.breadcrumb_ancestors(seen | {chosen.pk}) + [
+            {"template": chosen, "alternatives": parents}
+        ]
+
     class Meta:
         ordering = ["name"]
 
 
 class DesignTemplateElement(models.Model):
-    """One placeholder line in a DesignTemplate: a catalog Component and a
-    quantity. Deliberately no ComponentInstance reference here -- templates
-    describe what kind of parts an assembly needs, never specific serialized
-    items; those are chosen later on the instantiated Design."""
+    """One placeholder line in a DesignTemplate: either a catalog Component
+    (a leaf part) or another DesignTemplate (a nested sub-assembly), plus a
+    quantity -- exactly one of `component`/`child_template` must be set.
+    Validated in three overlapping layers so nothing can slip through:
+    clean() (so Django admin's form validation shows a friendly inline
+    error before ever attempting to save), save() (which always calls
+    clean() first, so the direct-ORM paths used by the web views and
+    hdb_client are covered too, not just forms), and a database
+    CheckConstraint for the both/neither shape as a backstop against
+    anything that bypasses save() entirely (bulk_create, raw SQL). The
+    self-nesting-cycle check can only be expressed in Python (it needs to
+    walk other rows), so clean()/save() are the sole enforcement for that
+    one -- there is no DB-level equivalent. Same for the two scope checks
+    a child_template must also pass -- same project, same owner_group as
+    the parent template (see DesignTemplate.can_nest) -- since those also
+    compare across rows/tables, which a CheckConstraint can't do.
+    Deliberately no ComponentInstance reference here -- templates describe
+    what kind of parts/sub-assemblies an assembly needs, never specific
+    serialized items; those are chosen later on the instantiated Design."""
     id = models.CharField(max_length=36, primary_key=True, editable=False)
-    template     = models.ForeignKey(DesignTemplate, on_delete=models.CASCADE, related_name="elements")
-    element_name = models.CharField(max_length=128)
-    component    = models.ForeignKey(Component, on_delete=models.CASCADE, related_name="template_memberships")
+    template       = models.ForeignKey(DesignTemplate, on_delete=models.CASCADE, related_name="elements")
+    element_name   = models.CharField(max_length=128)
+    component      = models.ForeignKey(Component, null=True, blank=True, on_delete=models.CASCADE, related_name="template_memberships")
+    child_template = models.ForeignKey(
+        DesignTemplate, null=True, blank=True, on_delete=models.PROTECT, related_name="parent_elements",
+        help_text="Nested sub-template placeholder, e.g. a Stave's element pointing at the Half-Stave template. "
+                   "PROTECTed rather than SET_NULL: deleting it out from under a placeholder that's set to "
+                   "exactly-one-of-component/child_template would leave neither set. Delete the placeholder "
+                   "(or repoint it) first, then the template.",
+    )
     quantity     = models.PositiveIntegerField(default=1)
     description  = models.TextField(blank=True)
+
+    def clean(self):
+        has_component = self.component_id is not None
+        has_child     = self.child_template_id is not None
+        if has_component == has_child:  # both set, or neither -- exactly one required
+            raise ValidationError(
+                "A template placeholder must reference exactly one of component or "
+                "child_template, not both or neither."
+            )
+        if has_child and self.template.would_create_cycle(self.child_template):
+            raise ValidationError(
+                f"{self.child_template.name!r} can't be added as a sub-template of "
+                f"{self.template.name!r} -- a template can never contain itself, "
+                f"directly or through further nesting."
+            )
+        if has_child and self.child_template.project != self.template.project:
+            raise ValidationError(
+                f"{self.child_template.name!r} (project {self.child_template.project!r}) can't be "
+                f"nested inside {self.template.name!r} (project {self.template.project!r}) -- "
+                f"a sub-assembly must belong to the same project as the template it's nested in."
+            )
+        if has_child and self.child_template.owner_group_id != self.template.owner_group_id:
+            child_group  = self.child_template.owner_group.name if self.child_template.owner_group_id else "no group"
+            parent_group = self.template.owner_group.name if self.template.owner_group_id else "no group"
+            raise ValidationError(
+                f"{self.child_template.name!r} (owned by {child_group}) can't be nested inside "
+                f"{self.template.name!r} (owned by {parent_group}) -- a sub-assembly must be owned "
+                f"by the same group as the template it's nested in."
+            )
 
     def save(self, *args, **kwargs):
         if not self.id:
             self.id = str(uuid.uuid4())
+        self.clean()
         super().save(*args, **kwargs)
+
+    def element_type(self):
+        return "TEMPLATE" if self.child_template_id else "COMPONENT"
 
     def __str__(self):
         return f"{self.template.name} / {self.element_name}"
@@ -429,6 +643,15 @@ class DesignTemplateElement(models.Model):
     class Meta:
         ordering = ["element_name"]
         unique_together = [("template", "element_name")]
+        constraints = [
+            models.CheckConstraint(
+                check=(
+                    models.Q(component__isnull=False, child_template__isnull=True) |
+                    models.Q(component__isnull=True, child_template__isnull=False)
+                ),
+                name="designtemplateelement_exactly_one_of_component_or_child_template",
+            ),
+        ]
 
 
 class Design(OwnedModel):
