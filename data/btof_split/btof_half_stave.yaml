@@ -1,0 +1,55 @@
+# ---------------------------------------------------------------------------
+# ePIC BTOF design template hierarchy, split into one file per template so
+# each level can be uploaded independently -- see data/btof_split/README.md
+# for why, and suggested upload orders to exercise against.
+#
+# Level 2 of 3: one half-stave, built from 8 stavelets. References "BTOF
+# Stavelet" (btof_stavelet.yaml) via child_template -- uploading this file
+# BEFORE that one is exactly the case the async loader is meant to handle:
+# this template still gets created, its "Stavelet Modules" placeholder is
+# recorded as pending, and DesignTemplate.is_complete() is False until
+# "BTOF Stavelet" is loaded, at which point it resolves automatically.
+#
+# Sourcing, full hierarchy description, and citations: see the header of
+# the original monolithic ../btof_stave_templates.yaml, which this was
+# split from -- unchanged here, just split apart.
+# ---------------------------------------------------------------------------
+
+template:
+  name: "BTOF Half-Stave"
+  project: "ePIC"
+  owner_group: BTOF
+  description: >
+    Half-stave support structure, 1316 mm total length (1296 mm active
+    + 20 mm end/service region) = 8 x 162 mm stavelet modules mounted
+    on a carbon-honeycomb support with active pipe cooling. 288 of
+    these are the fundamental counted unit of the whole BTOF detector
+    (32 AC-LGAD sensors/half-stave = 8 stavelets x 4 sensors).
+  product_component:
+    name: "BTOF Half-Stave"
+    model_number: "BTOF-HALFSTAVE-R1"
+    description: "1316 mm BTOF half-stave, 8 stavelets (see BTOF Half-Stave template)."
+    technical_system: "BTOF-Mechanical"
+elements:
+  - element_name: "Stavelet Modules"
+    quantity: 8
+    description: "8 x 162 mm = 1296 mm of active length per half-stave."
+    child_template: "BTOF Stavelet"   # see btof_stavelet.yaml -- need not be uploaded first
+
+  - element_name: "Peripheral Board"
+    quantity: 1
+    description: "Power/data aggregation board at the half-stave edge."
+    component:
+      name: "BTOF Peripheral Board"
+      model_number: "BTOF-PERIPH-01"
+      description: "Half-stave edge peripheral board -- power distribution and data concentration."
+      technical_system: "BTOF-Mechanical"
+
+  - element_name: "Cooling Pipe Segment"
+    quantity: 1
+    description: "Active pipe cooling embedded in the carbon-honeycomb support."
+    component:
+      name: "BTOF Cooling Pipe Segment"
+      model_number: "BTOF-COOL-01"
+      description: "Half-stave-length active cooling pipe, carbon-honeycomb embedded."
+      technical_system: "BTOF-Mechanical"

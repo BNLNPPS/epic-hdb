@@ -220,14 +220,24 @@ class DesignClient:
 
         Returns a summary dict: {"template", "template_created", "elements": [...]}.
         Raises ValueError if an element gives both or neither of
-        "component"/"child_template". A ValidationError propagates from
-        DesignTemplateElement.save() if a "child_template" element would
-        make a template (in)directly nest itself, or if the referenced
-        template doesn't share this one's project and owner_group (see
-        DesignTemplate.can_nest) -- so a YAML file whose templates aren't
-        loaded leaf-first with matching project/owner_group at every
-        level will fail loudly here rather than silently creating an
-        inconsistent nesting.
+        "component"/"child_template".
+
+        A "child_template" element does NOT have to already exist:
+        uploads are asynchronous and order-independent, so a parent
+        template's YAML can be loaded before the sub-template it names
+        has been uploaded at all. If the named template already exists,
+        the link is validated and made immediately -- the same as
+        before, and it still fails loudly here (ValidationError) if it
+        would make a template nest itself, or if the referenced template
+        doesn't share this one's project and owner_group (see
+        DesignTemplate.can_nest). If it doesn't exist yet, the element is
+        created as *pending*: this call still succeeds, and the link is
+        completed automatically -- with the same validation -- whenever
+        a template with that name is eventually loaded (see
+        resolve_pending_template_references(), called at the end of this
+        method and of load_templates_from_yaml() below). Use
+        DesignTemplate.is_complete()/pending_placeholders() to check
+        what, if anything, is still outstanding.
         """
         m = _m()
 
@@ -266,18 +276,25 @@ class DesignClient:
                     f"exactly one of 'component' or 'child_template', not both or neither."
                 )
             if has_child:
-                child_template = m.DesignTemplate.objects.get(name=el["child_template"])
+                child_name = el["child_template"]
+                # May legitimately not exist yet -- see docstring. Only an
+                # already-existing target is linked (and validated) here;
+                # a not-yet-uploaded one is recorded as pending and picked
+                # up later by resolve_pending_template_references().
+                child_template = m.DesignTemplate.objects.filter(name=child_name).first()
                 tpl_element, element_created = m.DesignTemplateElement.objects.get_or_create(
                     template=template, element_name=el["element_name"],
                     defaults={
                         "child_template": child_template,
+                        "child_template_name": child_name,
                         "quantity": el.get("quantity", 1),
                         "description": el.get("description", ""),
                     },
                 )
                 element_results.append({
                     "element_name": el["element_name"],
-                    "child_template": child_template.name,
+                    "child_template": child_name,
+                    "resolved": child_template is not None,
                     "element_created": element_created,
                 })
             else:
@@ -299,20 +316,43 @@ class DesignClient:
                     "element_created": element_created,
                 })
 
+        resolution = m.resolve_pending_template_references()
+
         return {
             "template": name,
             "template_created": template_created,
             "elements": element_results,
+            "resolution": resolution,
         }
 
-    def load_templates_from_yaml(self, path) -> list[dict]:
+    def resolve_pending_references(self) -> dict:
+        """Re-attempt every outstanding pending child_template reference
+        anywhere in the database, not just ones touched by a call this
+        session made -- useful after uploading templates through some
+        other path (admin, a script, another user's `hdb load-template`
+        run) to pick up anything that can now link. create_template() and
+        load_templates_from_yaml() already call this themselves, so this
+        is only needed to check on or re-trigger resolution on demand.
+        Returns {"resolved": [...], "conflicts": [...]} -- see
+        hdb.models.resolve_pending_template_references()."""
+        return _m().resolve_pending_template_references()
+
+    def load_templates_from_yaml(self, path) -> dict:
         """
-        Load one or more DesignTemplates from a YAML file. The file is
-        either a single template document, or {"templates": [...]} for
-        several -- loaded top to bottom, so for a multi-level hierarchy
-        list leaf templates first (each level's assembly Component must
-        already exist, or be defined earlier in the same file, before a
-        higher level can reference it).
+        Load one or more DesignTemplates from a single YAML file. The
+        file is either a single template document, or {"templates": [...]}
+        for several.
+
+        Uploads are asynchronous and order-independent -- see
+        create_template()'s docstring -- so documents within this file,
+        AND across separate calls/files/uploaders, no longer need to be
+        sequenced leaf-first: a document naming a "child_template" that
+        doesn't exist yet (in this file or already in the database) is
+        loaded as pending and linked automatically whenever a template
+        with that name eventually appears, from this file or any other.
+        The whole file is loaded in one transaction, so a mid-file error
+        (e.g. a malformed document) leaves nothing from this file
+        committed rather than a partial load.
 
         Document shape (one entry of "templates:", or the whole file for a
         single template):
@@ -328,17 +368,27 @@ class DesignClient:
                 quantity: int               # default 1
                 description: str
                 component: str | dict       # see _resolve_component()
-              # or, for a nested sub-assembly (must already exist -- list
-              # leaf templates first):
+              # or, for a nested sub-assembly (need not exist yet -- see
+              # above):
               - element_name: str
                 quantity: int
                 description: str
-                child_template: str         # name of an earlier template in this file
+                child_template: str         # name of another template, this file or any other
 
-        Returns a list of create_template()'s summary dicts, one per
-        template document.
+        Returns {"templates": [create_template()'s summary dicts, one per
+        document], "resolution": {"resolved": [...], "conflicts": [...]}}
+        -- the resolution entry is from the LAST resolver pass this call
+        made (each document's create_template() already re-resolves after
+        itself, so this reflects the fully-settled state after the whole
+        file, not just the last document alone). A non-empty "conflicts"
+        list means at least one pending reference, somewhere in the
+        database, names a template that exists but can't legally be
+        nested where it's referenced (cycle, or project/owner_group
+        mismatch) -- that needs a human to look at it; it will not
+        resolve itself no matter what else is uploaded.
         """
         import yaml
+        from django.db import transaction
 
         with open(path) as fh:
             data = yaml.safe_load(fh)
@@ -346,18 +396,20 @@ class DesignClient:
         docs = data["templates"] if isinstance(data, dict) and "templates" in data else [data]
 
         results = []
-        for doc in docs:
-            tpl = doc["template"]
-            results.append(self.create_template(
-                name=tpl["name"],
-                project=tpl.get("project", "ePIC"),
-                description=tpl.get("description", ""),
-                owner_group_name=tpl.get("owner_group"),
-                owner_username=tpl.get("owner_user"),
-                product_component=tpl.get("product_component"),
-                elements=doc.get("elements", []),
-            ))
-        return results
+        with transaction.atomic():
+            for doc in docs:
+                tpl = doc["template"]
+                results.append(self.create_template(
+                    name=tpl["name"],
+                    project=tpl.get("project", "ePIC"),
+                    description=tpl.get("description", ""),
+                    owner_group_name=tpl.get("owner_group"),
+                    owner_username=tpl.get("owner_user"),
+                    product_component=tpl.get("product_component"),
+                    elements=doc.get("elements", []),
+                ))
+        resolution = results[-1]["resolution"] if results else {"resolved": [], "conflicts": []}
+        return {"templates": results, "resolution": resolution}
 
     def delete_template(self, name: str | None = None, pk: str | None = None) -> dict:
         """
@@ -404,10 +456,19 @@ class DesignClient:
     def template_bom(self, template_name: str, _depth: int = 0, _max: int = MAX_BOM_DEPTH) -> list[dict]:
         """
         Recursive parts explosion for a DesignTemplate, same shape idea as
-        DesignClient.bom(): each row has "type" ("COMPONENT" or
-        "TEMPLATE") and "ref" (the component's or nested template's name).
-        A TEMPLATE row recurses into that sub-template's own elements; a
-        COMPONENT row is a leaf and also carries "model_number".
+        DesignClient.bom(): each row has "type" ("COMPONENT", "TEMPLATE",
+        or "PENDING") and "ref" (the component's or nested template's
+        name). A TEMPLATE row recurses into that sub-template's own
+        elements; a COMPONENT row is a leaf and also carries
+        "model_number". A PENDING row is a template-type placeholder
+        whose named child_template hasn't been uploaded yet (see
+        DesignTemplateElement.child_template_name) -- "ref" is still the
+        name it's waiting on, but there's nothing to recurse into and no
+        model_number, since there's no real object behind it yet. Callers
+        that need to know whether a BOM is fully known should check
+        DesignTemplate.is_complete() rather than scan for PENDING rows
+        themselves -- that already accounts for pending references
+        arbitrarily deep in the tree, not just at this level.
         """
         if _depth > _max:
             return [{"error": "max depth exceeded"}]
@@ -415,14 +476,19 @@ class DesignClient:
         for tel in self.template_elements(template_name):
             entry = {
                 "element": tel.element_name,
-                "type": tel.element_type(),
                 "qty": tel.quantity,
                 "description": tel.description,
             }
             if tel.child_template_id:
+                entry["type"] = "TEMPLATE"
                 entry["ref"] = tel.child_template.name
                 entry["children"] = self.template_bom(tel.child_template.name, _depth + 1, _max)
+            elif tel.child_template_name:
+                entry["type"] = "PENDING"
+                entry["ref"] = tel.child_template_name
+                entry["children"] = []
             else:
+                entry["type"] = "COMPONENT"
                 entry["ref"] = tel.component.name
                 entry["model_number"] = tel.component.model_number
                 entry["children"] = []

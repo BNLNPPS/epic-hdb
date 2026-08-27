@@ -141,7 +141,13 @@ class DesignTemplateElementInline(admin.TabularInline):
     # DesignTemplate (template, child_template) -- this inline is anchored
     # to the *owning* template, not the (optional) nested one.
     fk_name = "template"
-    fields = ("element_name", "component", "child_template", "quantity", "description")
+    # child_template_name alongside child_template: a template-type
+    # placeholder can be pending (child_template blank, child_template_name
+    # set to a not-yet-uploaded name) -- see DesignTemplateElement's
+    # docstring/help_text. Leaving child_template_name out here would make
+    # that state impossible to create by hand through admin, even though
+    # it's a normal, valid row shape now.
+    fields = ("element_name", "component", "child_template", "child_template_name", "quantity", "description")
 
 
 @admin.register(DesignTemplate)

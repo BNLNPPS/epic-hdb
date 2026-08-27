@@ -145,7 +145,7 @@ dialog.modal::backdrop { background: rgba(20,23,34,.45); }
         <select id="ft-template" name="template" required>
           <option value="">—</option>
           {% for tpl in templates %}
-          <option value="{{ tpl.pk }}" {% if form_data.template == tpl.pk %}selected{% endif %}>{{ tpl.name }} ({{ tpl.elements.all|length }} placeholder{{ tpl.elements.all|length|pluralize }})</option>
+          <option value="{{ tpl.pk }}" {% if form_data.template == tpl.pk %}selected{% endif %}>{{ tpl.name }} ({{ tpl.elements.all|length }} placeholder{{ tpl.elements.all|length|pluralize }}){% if not tpl.is_complete_cached %} — incomplete, not yet instantiable{% endif %}</option>
           {% endfor %}
         </select>
       </div>

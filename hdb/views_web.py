@@ -1107,11 +1107,19 @@ def design_list(request):
 
     user_group_ids = set(request.user.groups.values_list('id', flat=True))
     if request.user.is_superuser:
-        usable_templates = DesignTemplate.objects.prefetch_related('elements').order_by('name')
+        usable_templates = DesignTemplate.objects.prefetch_related('elements__child_template').order_by('name')
     else:
         usable_templates = DesignTemplate.objects.filter(
             owner_group_id__in=user_group_ids
-        ).prefetch_related('elements').order_by('name')
+        ).prefetch_related('elements__child_template').order_by('name')
+    # Annotate each option with completeness so the dropdown can flag one
+    # that would just be rejected below -- computed in Python (is_complete
+    # isn't a DB column, see the model), which is fine at this table's
+    # size. Kept as a plain list rather than re-assigning usable_templates
+    # so it's still usable as a queryset elsewhere if that's ever needed.
+    usable_templates = list(usable_templates)
+    for tpl in usable_templates:
+        tpl.is_complete_cached = tpl.is_complete()
 
     if request.method == 'POST':
         template_id = request.POST.get('template') or None
@@ -1128,6 +1136,12 @@ def design_list(request):
             form_error = 'Please choose a template.'
         elif not can_instantiate:
             return HttpResponseForbidden("You don't have permission to instantiate this template.")
+        elif not template.is_complete():
+            form_error = (
+                f'"{template.name}" is incomplete -- one or more nested sub-templates '
+                f'haven’t been uploaded yet, so it can’t be instantiated. '
+                f'See its page for exactly what’s still pending.'
+            )
         elif not name:
             form_error = 'Design name is required.'
         elif Design.objects.filter(name=name).exists():
@@ -1572,6 +1586,7 @@ def template_list(request):
 
     q     = request.GET.get('q', '')
     group = request.GET.get('group', '')
+    status = request.GET.get('status', '')
     qs = DesignTemplate.objects.select_related('owner_group', 'owner_user').annotate(
         placeholder_count=Count('elements', distinct=True),
         design_count=Count('designs', distinct=True),
@@ -1581,13 +1596,27 @@ def template_list(request):
     if group:
         qs = qs.filter(owner_group__name=group)
 
-    paginator = Paginator(qs, PAGE_SIZE)
+    # Completeness isn't a DB column (see DesignTemplate.is_complete) --
+    # computed here so a stuck pending reference is visible on the list,
+    # not just discoverable by opening every template individually.
+    # Filtering by it happens in Python for the same reason, over the
+    # already-filtered qs; fine at this table's size.
+    templates_annotated = list(qs)
+    for tpl in templates_annotated:
+        tpl.is_complete_cached = tpl.is_complete()
+    incomplete_count = sum(1 for tpl in templates_annotated if not tpl.is_complete_cached)
+    if status == 'incomplete':
+        templates_annotated = [tpl for tpl in templates_annotated if not tpl.is_complete_cached]
+
+    paginator = Paginator(templates_annotated, PAGE_SIZE)
     page_obj  = paginator.get_page(request.GET.get('page'))
 
     context = {
-        'page_obj':     page_obj,
-        'q':            q,
-        'group':        group,
+        'page_obj':         page_obj,
+        'q':                q,
+        'group':            group,
+        'status':           status,
+        'incomplete_count': incomplete_count,
         'query_str':    _qs(request),
         'groups':       creatable_groups,
         # All groups, for the filter dropdown -- deliberately separate from
@@ -1664,6 +1693,17 @@ def template_detail(request, pk):
     # read-only feature, so it's computed regardless of can_edit.
     breadcrumb_ancestors = template.breadcrumb_ancestors()
 
+    # Completeness: whether every placeholder anywhere beneath this
+    # template resolves to a real Component or a (itself complete) nested
+    # DesignTemplate -- see DesignTemplate.is_complete(). YAML uploads are
+    # asynchronous, so a template can sit incomplete for a while, waiting
+    # on a sub-template someone hasn't uploaded yet; while it does, it
+    # can't be instantiated into a Design (enforced in design_list below).
+    # pending_placeholders() is just THIS template's own missing names --
+    # if is_complete is False but that list is empty, the gap is further
+    # down the hierarchy, in a nested sub-template's own placeholders.
+    is_complete = template.is_complete()
+
     context = {
         'template':             template,
         'can_edit':             can_edit,
@@ -1671,6 +1711,8 @@ def template_detail(request, pk):
         'is_locked':            is_locked,
         'is_referenced':        is_referenced,
         'breadcrumb_ancestors': breadcrumb_ancestors,
+        'is_complete':          is_complete,
+        'pending_placeholders': template.pending_placeholders() if not is_complete else [],
         'designs_from':         template.designs.select_related('owner_user').order_by('name'),
         'active_page':          'design-templates',
     }

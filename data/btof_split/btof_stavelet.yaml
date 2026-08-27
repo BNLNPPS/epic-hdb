@@ -1,0 +1,72 @@
+# ---------------------------------------------------------------------------
+# ePIC BTOF design template hierarchy, split into one file per template so
+# each level can be uploaded independently -- see data/btof_split/README.md
+# for why, and suggested upload orders to exercise against.
+#
+# Level 3 of 3 (leaf assembly): one stavelet module. Nested by
+# btof_half_stave.yaml's "Stavelet Modules" placeholder (child_template:
+# "BTOF Stavelet") -- this file does not itself reference anything, so it
+# always loads as fully resolved regardless of what has or hasn't been
+# uploaded yet.
+#
+# Sourcing, full hierarchy description, and citations: see the header of
+# the original monolithic ../btof_stave_templates.yaml, which this was
+# split from -- unchanged here, just split apart.
+# ---------------------------------------------------------------------------
+
+template:
+  name: "BTOF Stavelet"
+  project: "ePIC"
+  owner_group: BTOF
+  description: >
+    Pluggable BTOF module, 162 mm long, double-sided (front/back).
+    Carries 4 AC-LGAD strip sensors total, each read out 1:1 by a
+    128-channel FCFDv2 ASIC via an interposer board, aggregated onto
+    one flex cable (FPC) at the module edge. Assembled and
+    thermally/electrically qualified as a standalone unit before
+    being mounted onto a half-stave (baseline "modularized stave"
+    design, BTOF DAC review 5/31/2025).
+  # The catalog entry for one physically completed, QA'd stavelet --
+  # this is what a real ComponentInstance is created against once a
+  # stavelet has actually been built (see the file header note on why
+  # stavelets are tracked individually). Independent of this template
+  # nesting into "BTOF Half-Stave".
+  product_component:
+    name: "BTOF Stavelet"
+    model_number: "BTOF-STAVELET-R1"
+    description: "162 mm double-sided AC-LGAD stavelet module (see BTOF Stavelet template)."
+    technical_system: "BTOF-Mechanical"
+elements:
+  - element_name: "AC-LGAD Sensors"
+    quantity: 4
+    description: >
+      Strip AC-LGAD, nominal 3.2x2.2 cm, 1 cm strip length, 500 um
+      pitch, 128 ch/sensor, ~35 ps timing / ~30 um spatial resolution.
+      Existing catalog component -- not recreated.
+    component: "AC-LGAD Sensor"
+
+  - element_name: "FCFD Readout ASICs"
+    quantity: 4
+    description: >
+      128-channel Fermilab Constant-Fraction-Discriminator ASIC, one
+      per sensor (1:1 channel match). Existing catalog component.
+    component: "FCFDv2 Readout"
+
+  - element_name: "Interposer Boards"
+    quantity: 4
+    description: "Sensor-to-ASIC interposer, one per sensor/ASIC pair."
+    component:
+      name: "BTOF Interposer Board"
+      model_number: "BTOF-INT-01"
+      description: "Sensor-to-FCFD interposer board for one BTOF stavelet channel."
+      technical_system: "BTOF-Mechanical"
+      technical_system_group: BTOF
+
+  - element_name: "Flex Cable (FPC)"
+    quantity: 1
+    description: "Aggregates all 4 sensor/ASIC channels to the module edge connector."
+    component:
+      name: "BTOF Flex Cable (FPC)"
+      model_number: "BTOF-FPC-01"
+      description: "Flexible printed circuit, stavelet-to-half-stave signal/power interconnect."
+      technical_system: "BTOF-Mechanical"

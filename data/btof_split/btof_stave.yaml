@@ -1,0 +1,43 @@
+# ---------------------------------------------------------------------------
+# ePIC BTOF design template hierarchy, split into one file per template so
+# each level can be uploaded independently -- see data/btof_split/README.md
+# for why, and suggested upload orders to exercise against.
+#
+# Level 1 of 3 (top): one stave, built from half-staves. References "BTOF
+# Half-Stave" (btof_half_stave.yaml) via child_template -- uploading this
+# file first, before EITHER of the other two, is the deepest case: this
+# template is created with a pending placeholder, and stays incomplete
+# even after btof_half_stave.yaml loads too, until btof_stavelet.yaml
+# finally arrives and both levels resolve.
+#
+# Sourcing, full hierarchy description, and citations: see the header of
+# the original monolithic ../btof_stave_templates.yaml, which this was
+# split from -- unchanged here, just split apart.
+# ---------------------------------------------------------------------------
+
+template:
+  name: "BTOF Stave"
+  project: "ePIC"
+  owner_group: BTOF
+  description: >
+    Full BTOF stave: a carbon-honeycomb backbone carrying half-staves
+    tilted at 18 degrees (design baseline) in the "pinwheel" barrel
+    structure. BTOF has 288 half-staves total across two symmetric
+    stave sections; this template assumes 144 half-staves/stave
+    (288 / 2) -- see the original file's header note, this split isn't
+    stated explicitly in the source material and is this file's own
+    estimate.
+elements:
+  - element_name: "Half-Stave Assemblies"
+    quantity: 144
+    description: "Estimated count -- see file header note on the 288-total / 2-stave-sections split."
+    child_template: "BTOF Half-Stave"   # see btof_half_stave.yaml -- need not be uploaded first
+
+  - element_name: "Carbon Honeycomb Support"
+    quantity: 1
+    description: "Stave-length carbon honeycomb backbone, 18-degree tilt mounting."
+    component:
+      name: "BTOF Carbon Honeycomb Support"
+      model_number: "BTOF-SUPPORT-01"
+      description: "Stave backbone structure, carbon honeycomb, active-cooling manifold interface."
+      technical_system: "BTOF-Mechanical"

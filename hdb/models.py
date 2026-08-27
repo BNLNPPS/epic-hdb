@@ -512,6 +512,51 @@ class DesignTemplate(OwnedModel):
 
         return _depth(self, set())
 
+    def is_complete(self, _memo=None):
+        """True if every placeholder anywhere in this template's subtree
+        resolves to either a catalog Component or a nested DesignTemplate
+        that is itself complete -- i.e. nothing beneath this template is
+        still waiting on a YAML file that hasn't been uploaded yet (see
+        DesignTemplateElement.child_template_name and
+        resolve_pending_template_references() below).
+
+        Computed on demand rather than stored: cheap (bounded by
+        TEMPLATE_NESTING_MAX_DEPTH, same as nesting_levels/
+        breadcrumb_ancestors above) and can never go stale the way a
+        cached column would need explicit invalidation to avoid. `_memo`
+        caches by template id within one call so a template reused in
+        several places (a "diamond") is only walked once. Resolved
+        child_template edges are already guaranteed acyclic by
+        would_create_cycle at write time, so straightforward recursion
+        with memoization is safe -- no separate cycle guard needed here.
+        """
+        memo = _memo if _memo is not None else {}
+        if self.pk in memo:
+            return memo[self.pk]
+        complete = True
+        for element in self.elements.select_related('child_template'):
+            if element.component_id is not None:
+                continue
+            if element.child_template_id is None:
+                complete = False
+                break
+            if not element.child_template.is_complete(memo):
+                complete = False
+                break
+        memo[self.pk] = complete
+        return complete
+
+    def pending_placeholders(self):
+        """This template's OWN placeholders (not recursing into nested
+        sub-templates) that are still waiting on a template name that
+        hasn't been uploaded yet. Used on the template detail page to
+        tell a viewer exactly which name(s) are missing, rather than just
+        that something, somewhere, isn't complete -- see is_complete()."""
+        return [
+            el for el in self.elements.all()
+            if el.child_template_id is None and el.child_template_name
+        ]
+
     def parent_templates(self):
         """Distinct DesignTemplates that reference this one as a
         child_template placeholder in one (or more) of their elements,
@@ -592,34 +637,67 @@ class DesignTemplateElement(models.Model):
     child_template = models.ForeignKey(
         DesignTemplate, null=True, blank=True, on_delete=models.PROTECT, related_name="parent_elements",
         help_text="Nested sub-template placeholder, e.g. a Stave's element pointing at the Half-Stave template. "
-                   "PROTECTed rather than SET_NULL: deleting it out from under a placeholder that's set to "
+                   "Left NULL while child_template_name hasn't resolved yet -- see that field and "
+                   "resolve_pending_template_references(). PROTECTed rather than SET_NULL once "
+                   "resolved: deleting it out from under a placeholder that's set to "
                    "exactly-one-of-component/child_template would leave neither set. Delete the placeholder "
                    "(or repoint it) first, then the template.",
+    )
+    child_template_name = models.CharField(
+        max_length=256, blank=True, default="",
+        help_text="For a template-type placeholder, the child_template's name as given in the "
+                   "uploaded YAML -- always populated for that placeholder shape, whether or not "
+                   "child_template has resolved yet. YAML uploads are asynchronous and order-"
+                   "independent: a parent template can be uploaded before the sub-template it "
+                   "names exists. When it names a template that isn't in the database yet, "
+                   "child_template stays NULL and this field records the intent; "
+                   "resolve_pending_template_references() re-attempts the link (with the same "
+                   "cycle/project/owner_group validation as an eagerly-resolved reference) after "
+                   "every YAML upload, so upload order never matters. See "
+                   "DesignTemplate.is_complete()/pending_placeholders() for the reader-facing view "
+                   "of what's still outstanding. Left blank for a component-type placeholder.",
     )
     quantity     = models.PositiveIntegerField(default=1)
     description  = models.TextField(blank=True)
 
     def clean(self):
-        has_component = self.component_id is not None
-        has_child     = self.child_template_id is not None
-        if has_component == has_child:  # both set, or neither -- exactly one required
+        has_component     = self.component_id is not None
+        is_template_slot  = bool(self.child_template_name)
+        if has_component == is_template_slot:  # both set, or neither -- exactly one required
             raise ValidationError(
                 "A template placeholder must reference exactly one of component or "
-                "child_template, not both or neither."
+                "child_template (name), not both or neither."
             )
-        if has_child and self.template.would_create_cycle(self.child_template):
+        if self.child_template_id is not None and self.child_template.name != self.child_template_name:
+            # Belt-and-suspenders: the two should always be set together by
+            # create_template()/resolve_pending_template_references() --
+            # this catches a bug in either, rather than silently letting a
+            # resolved FK and its recorded name drift apart.
+            raise ValidationError(
+                f"child_template ({self.child_template.name!r}) doesn't match "
+                f"child_template_name ({self.child_template_name!r}) -- these must agree."
+            )
+        # The three cross-row checks below only apply once child_template has
+        # actually resolved -- a still-pending reference (child_template_name
+        # set, child_template NULL) can't be validated yet because there's no
+        # real template row to check against. resolve_pending_template_
+        # references() applies these same checks the moment resolution
+        # happens, so nothing here is skipped forever, only deferred.
+        if self.child_template_id is None:
+            return
+        if self.template.would_create_cycle(self.child_template):
             raise ValidationError(
                 f"{self.child_template.name!r} can't be added as a sub-template of "
                 f"{self.template.name!r} -- a template can never contain itself, "
                 f"directly or through further nesting."
             )
-        if has_child and self.child_template.project != self.template.project:
+        if self.child_template.project != self.template.project:
             raise ValidationError(
                 f"{self.child_template.name!r} (project {self.child_template.project!r}) can't be "
                 f"nested inside {self.template.name!r} (project {self.template.project!r}) -- "
                 f"a sub-assembly must belong to the same project as the template it's nested in."
             )
-        if has_child and self.child_template.owner_group_id != self.template.owner_group_id:
+        if self.child_template.owner_group_id != self.template.owner_group_id:
             child_group  = self.child_template.owner_group.name if self.child_template.owner_group_id else "no group"
             parent_group = self.template.owner_group.name if self.template.owner_group_id else "no group"
             raise ValidationError(
@@ -631,11 +709,26 @@ class DesignTemplateElement(models.Model):
     def save(self, *args, **kwargs):
         if not self.id:
             self.id = str(uuid.uuid4())
+        # Auto-derive child_template_name from an already-resolved
+        # child_template for any caller that sets the FK directly without
+        # also setting the name (direct ORM use, admin, scripts, existing
+        # tests) -- one less thing to remember, and keeps the two fields
+        # from silently drifting apart for that common case. Callers
+        # creating a still-*pending* reference (child_template NULL) must
+        # set child_template_name themselves -- there's no FK to derive it
+        # from.
+        if self.child_template_id and not self.child_template_name:
+            self.child_template_name = self.child_template.name
         self.clean()
         super().save(*args, **kwargs)
 
+    def is_pending(self):
+        """True if this is a template-type placeholder whose child_template
+        hasn't resolved yet -- see child_template_name's help text."""
+        return self.child_template_id is None and bool(self.child_template_name)
+
     def element_type(self):
-        return "TEMPLATE" if self.child_template_id else "COMPONENT"
+        return "TEMPLATE" if self.child_template_name else "COMPONENT"
 
     def __str__(self):
         return f"{self.template.name} / {self.element_name}"
@@ -646,12 +739,79 @@ class DesignTemplateElement(models.Model):
         constraints = [
             models.CheckConstraint(
                 check=(
-                    models.Q(component__isnull=False, child_template__isnull=True) |
-                    models.Q(component__isnull=True, child_template__isnull=False)
+                    models.Q(component__isnull=False, child_template__isnull=True, child_template_name="") |
+                    (models.Q(component__isnull=True) & ~models.Q(child_template_name=""))
                 ),
                 name="designtemplateelement_exactly_one_of_component_or_child_template",
             ),
         ]
+
+
+def resolve_pending_template_references():
+    """Re-attempt to link every DesignTemplateElement that names a
+    child_template by string (child_template_name) but hasn't resolved the
+    FK yet. YAML uploads are asynchronous and order-independent -- a
+    parent template's YAML can be uploaded before the sub-template it
+    names exists -- so this is what actually makes that true: called
+    after every upload (see hdb_client.designs.DesignClient), it matches
+    every pending element against the templates that now exist, purely by
+    name. Safe to call repeatedly (a no-op once nothing new resolves) and
+    doesn't need to run in any particular order relative to uploads.
+
+    For each pending element, one of three things happens:
+      - no template named `child_template_name` exists yet: left
+        untouched, still pending.
+      - a template with that name exists but fails the same validation an
+        eagerly-resolved reference would get (would create a cycle, or a
+        project/owner_group mismatch, see DesignTemplate.can_nest): left
+        pending, but reported back as a *conflict* rather than an
+        ordinary "still waiting" case. This is a meaningfully different
+        situation for a human to see -- unlike a name nobody's uploaded
+        yet, no future upload will ever make this particular link valid;
+        it needs a rename or a scope fix.
+      - a template with that name exists and passes validation: the FK is
+        linked (via save(), so clean() re-validates the same way an
+        eagerly-resolved reference always has) and reported as resolved.
+
+    One pass over the pending set is always sufficient: resolving element
+    A only requires a matching template *row* to exist, not for that
+    template to itself be complete, and resolving A can't change what any
+    other pending element's name matches against. Callers should wrap
+    this in transaction.atomic() alongside whatever upload triggered it.
+
+    Returns {"resolved": [...], "conflicts": [...]}, each entry a dict
+    identifying the template/element/name involved (and, for a conflict,
+    why it was rejected).
+    """
+    resolved, conflicts = [], []
+    pending = DesignTemplateElement.objects.filter(
+        child_template__isnull=True,
+    ).exclude(child_template_name="").select_related("template")
+    for element in pending:
+        match = DesignTemplate.objects.filter(name=element.child_template_name).first()
+        if match is None:
+            continue
+        if not element.template.can_nest(match):
+            conflicts.append({
+                "template": element.template.name,
+                "element_name": element.element_name,
+                "child_template_name": element.child_template_name,
+                "reason": (
+                    f"a template named {match.name!r} exists, but can't be nested inside "
+                    f"{element.template.name!r} -- it would create a cycle, or its project/"
+                    f"owner_group doesn't match. Rename one of them, or fix the scope; "
+                    f"re-uploading won't resolve this on its own."
+                ),
+            })
+            continue
+        element.child_template = match
+        element.save()
+        resolved.append({
+            "template": element.template.name,
+            "element_name": element.element_name,
+            "child_template": match.name,
+        })
+    return {"resolved": resolved, "conflicts": conflicts}
 
 
 class Design(OwnedModel):

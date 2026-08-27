@@ -236,8 +236,11 @@ def cmd_load_template(client, args):
 
     Idempotent -- safe to re-run. Existing templates, elements, and
     components are never modified or duplicated; only what's missing gets
-    created. See client/README.md for the YAML format and the flat
-    multi-level-template naming convention.
+    created. Loading order doesn't matter -- a `child_template` element
+    naming a template that hasn't been uploaded yet (in this file, or at
+    all) is loaded as pending rather than failing, and resolves
+    automatically the moment a template with that name is loaded, from
+    this file or any other. See client/README.md for the YAML format.
 
     Examples
     --------
@@ -247,7 +250,7 @@ def cmd_load_template(client, args):
     """
     path = _data_path(args, args.file)
     try:
-        results = client.designs.load_templates_from_yaml(path)
+        outcome = client.designs.load_templates_from_yaml(path)
     except FileNotFoundError:
         print(f"Error: file not found: {args.file!r} (looked in cwd and data/)", file=sys.stderr)
         sys.exit(1)
@@ -256,19 +259,31 @@ def cmd_load_template(client, args):
         sys.exit(1)
 
     if args.yaml:
-        _yaml(results)
+        _yaml(outcome)
         return
 
-    for r in results:
+    for r in outcome["templates"]:
         status = "created" if r["template_created"] else "already existed"
         print(f"Template {r['template']!r}: {status}")
         for el in r["elements"]:
             el_status = "created" if el["element_created"] else "already existed"
             if "child_template" in el:
-                print(f"  - {el['element_name']}: [template] {el['child_template']} [{el_status}]")
+                pending_note = "" if el.get("resolved", True) else " [PENDING -- not uploaded yet]"
+                print(f"  - {el['element_name']}: [template] {el['child_template']} [{el_status}]{pending_note}")
             else:
                 comp_status = " (component created)" if el["component_created"] else ""
                 print(f"  - {el['element_name']}: {el['component']}{comp_status} [{el_status}]")
+
+    resolution = outcome["resolution"]
+    if resolution["resolved"]:
+        print(f"\nResolved {len(resolution['resolved'])} previously-pending reference(s):")
+        for r in resolution["resolved"]:
+            print(f"  - {r['template']} / {r['element_name']} -> {r['child_template']}")
+    if resolution["conflicts"]:
+        print(f"\nWARNING: {len(resolution['conflicts'])} reference(s) exist but can't legally resolve "
+              f"(needs a rename or a scope fix, not another upload):", file=sys.stderr)
+        for c in resolution["conflicts"]:
+            print(f"  - {c['template']} / {c['element_name']} -> {c['child_template_name']}: {c['reason']}", file=sys.stderr)
 
 
 def cmd_bom_template(client, args):

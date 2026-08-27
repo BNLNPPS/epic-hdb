@@ -247,16 +247,18 @@ nesting via `DesignElement.child_design`, and physical instance tracking;
 (`child_template`, another `DesignTemplate`), exactly one of the two, ever.
 A template can never nest itself, directly or through further levels, and
 a `child_template` must share its parent's `project` and `owner_group` --
-both enforced unconditionally in `DesignTemplateElement.save()`, so a
-YAML file's templates must be loaded leaf-first with matching
-project/owner_group at every level (see `load_templates_from_yaml`'s
-docstring). Instantiating a
+both enforced in `DesignTemplateElement.save()` (immediately if the named
+`child_template` already exists; automatically, the moment it does, if
+not -- see "loading order" below). Instantiating a
 template that contains nested placeholders recursively instantiates a
 child `Design` for each one too, so a multi-level template produces a
 fully wired-up multi-level `Design` immediately, not empty slots to fill
-in by hand. A template locks once any `Design` is instantiated from it,
-and can only be *deleted* by a superuser while unlocked AND not nested
-inside another template's placeholder (`child_template` is `PROTECT`ed).
+in by hand -- but only once every placeholder beneath it has resolved
+(`DesignTemplate.is_complete()`); instantiating an incomplete template is
+rejected, both in `hdb_client` and the web UI. A template locks once any
+`Design` is instantiated from it, and can only be *deleted* by a
+superuser while unlocked AND not nested inside another template's
+placeholder (`child_template` is `PROTECT`ed).
 
 **The full conceptual explanation — the `Design` vs. `DesignTemplate`
 comparison, the worked BTOF Stave → Half-Stave → Stavelet example, the
@@ -274,10 +276,17 @@ section covers the mechanics of loading one from a YAML file.
 
 ```python
 client.designs.load_templates_from_yaml("data/btof_stave_templates.yaml")
-# -> list of per-template summary dicts:
-#    [{"template": "BTOF Stavelet", "template_created": True,
-#      "elements": [{"element_name": "AC-LGAD Sensors", "component": "AC-LGAD Sensor",
-#                    "component_created": False, "element_created": True}, ...]}, ...]
+# -> {"templates": [ per-template summary dicts, one per document:
+#       {"template": "BTOF Stavelet", "template_created": True,
+#        "elements": [{"element_name": "AC-LGAD Sensors", "component": "AC-LGAD Sensor",
+#                      "component_created": False, "element_created": True}, ...],
+#        "resolution": {"resolved": [...], "conflicts": [...]}}, ...],
+#     "resolution": {"resolved": [...], "conflicts": [...]}}   # settled state after the whole file
+
+client.designs.resolve_pending_references()
+# -> re-check every outstanding pending reference in the database, not just
+#    ones this file touched -- e.g. after someone else's separate upload.
+#    Same {"resolved": [...], "conflicts": [...]} shape.
 
 client.designs.template_bom("BTOF Stave")
 # -> recursive parts explosion, same shape idea as designs.bom():
@@ -286,7 +295,9 @@ client.designs.template_bom("BTOF Stave")
 #      "children": [ ... recurses into the BTOF Half-Stave template ... ]},
 #     {"element": "Carbon Honeycomb Support", "type": "COMPONENT",
 #      "ref": "BTOF Carbon Honeycomb Support", "model_number": "BTOF-SUPPORT-01",
-#      "qty": 1, "description": "...", "children": []}]
+#      "qty": 1, "description": "...", "children": []},
+#     {"element": "Not Yet Uploaded", "type": "PENDING",
+#      "ref": "Some Template Nobody's Loaded Yet", "qty": 1, "description": "...", "children": []}]
 
 client.designs.all_templates()                 # queryset of DesignTemplate
 client.designs.get_template(name="BTOF Stave")
@@ -303,10 +314,23 @@ YAML's `owner_group`/`owner_user`) are recorded on the template if given, but
 there's no requirement that the acting user belong to that group (unlike
 `inventory.create()`).
 
+**Loading order doesn't matter.** A `child_template` element doesn't have
+to already exist — uploads are asynchronous, so a parent's file can be
+loaded before the sub-template it names has been uploaded at all, in this
+file, a separate file, or a separate `hdb load-template` run entirely.
+When the named template doesn't exist yet, the placeholder is created as
+*pending* (this still succeeds) and linked automatically -- with the same
+project/owner_group/cycle validation an already-existing reference gets
+immediately -- the moment a template with that name is eventually loaded.
+Use `DesignTemplate.is_complete()` (or the template's detail page in the
+web UI, which shows a banner naming exactly what's still missing) to see
+whether anything is still outstanding; a `resolution.conflicts` entry
+anywhere above means a name that exists can never legally resolve where
+it's referenced (wrong project/owner_group, or a cycle) — that needs a
+rename or a scope fix, not another upload.
+
 YAML file format (a single template document, or `templates: [...]` for
-several — loaded top to bottom, so for a multi-level hierarchy list leaf
-templates first: a `child_template` element needs the level below's
-`DesignTemplate` to already exist):
+several):
 
 ```yaml
 templates:
@@ -343,9 +367,10 @@ templates:
       - element_name: "Stavelet Modules"
         quantity: 8
         description: "..."
-        child_template: "BTOF Stavelet"   # nests the template above --
-                                           # must already exist/have been
-                                           # loaded earlier in this file.
+        child_template: "BTOF Stavelet"   # nests the template above by
+                                           # name -- doesn't need to exist
+                                           # yet; see "Loading order"
+                                           # above if it's uploaded later.
 ```
 
 See `data/btof_stave_templates.yaml` for the full, real worked example: the

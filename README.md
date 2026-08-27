@@ -292,15 +292,39 @@ just a UI check.
 |-------|-------------|
 | `element_name` | Unique within the template |
 | `component` | FK → `Component`, nullable — set for a leaf placeholder |
-| `child_template` | FK → `DesignTemplate`, nullable — set for a nested sub-assembly placeholder (**real nesting**, mirrors `child_design`) |
+| `child_template` | FK → `DesignTemplate`, nullable — set for a nested sub-assembly placeholder once resolved (**real nesting**, mirrors `child_design`) |
+| `child_template_name` | The nested sub-assembly's name as uploaded, always set alongside a template-type placeholder — `child_template` may still be null if that name hasn't been uploaded yet (see "Asynchronous, order-independent loading" below) |
 | `quantity` | Number needed (applies to either kind) |
 
-Exactly one of `component` or `child_template` is set per element
-(`element_type()` returns `"COMPONENT"` or `"TEMPLATE"` based on which),
-enforced three ways: `DesignTemplateElement.clean()`/`save()` (a friendly
-`ValidationError` on every write path — the web UI, `hdb_client`, direct
-ORM use), and a database `CheckConstraint` as a backstop against anything
-that bypasses `save()` (`bulk_create`, raw SQL).
+Exactly one of `component` or a template reference (`child_template`/
+`child_template_name`) is set per element (`element_type()` returns
+`"COMPONENT"` or `"TEMPLATE"` based on which — the latter regardless of
+whether the reference has resolved yet), enforced three ways:
+`DesignTemplateElement.clean()`/`save()` (a friendly `ValidationError` on
+every write path — the web UI, `hdb_client`, direct ORM use), and a
+database `CheckConstraint` as a backstop against anything that bypasses
+`save()` (`bulk_create`, raw SQL).
+
+#### Asynchronous, order-independent loading
+
+A `child_template` reference doesn't have to already exist when its
+parent is uploaded. YAML templates are loaded via `hdb_client`/the `hdb
+load-template` CLI command (below), and that loading is asynchronous: a
+parent's file can be uploaded before the sub-template it names has been
+uploaded at all — from any file, by any uploader, in any order. When the
+named template doesn't exist yet, the placeholder is created *pending*
+(`child_template` null, `child_template_name` recording the intended
+name) rather than failing, and is linked automatically — with the same
+cycle/project/owner_group validation an already-existing reference gets
+immediately — the moment a template with that name is eventually loaded
+(`resolve_pending_template_references()`, called after every upload).
+
+`DesignTemplate.is_complete()` is true only once every placeholder
+anywhere beneath a template has resolved; **a Design can never be
+instantiated from an incomplete template**, enforced server-side, not
+just hidden in the UI. The template detail page shows an "Incomplete"
+banner naming exactly what's still pending; the Design Templates list
+page flags and can filter to incomplete templates the same way.
 
 #### Templates nest, structurally identically to Designs
 
