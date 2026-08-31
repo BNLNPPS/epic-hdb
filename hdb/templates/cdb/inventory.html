@@ -140,8 +140,15 @@ dialog.modal::backdrop { background: rgba(20,23,34,.45); }
       <option value="{{ u.username }}" {% if owner == u.username %}selected{% endif %}>{{ u.get_full_name|default:u.username }}</option>
     {% endfor %}
   </select>
+  <select name="design" class="filter-select">
+    <option value="">All Designs</option>
+    <option value="unassigned" {% if design == "unassigned" %}selected{% endif %}>— Unassigned —</option>
+    {% for d in designs %}
+      <option value="{{ d.pk }}" {% if design == d.pk %}selected{% endif %}>{{ d.name }}</option>
+    {% endfor %}
+  </select>
   <button type="submit" class="btn btn-primary">Search</button>
-  {% if q or location or system or group or owner %}<a href="{% url 'inventory-list' %}" class="btn btn-ghost">Clear</a>{% endif %}
+  {% if q or location or system or group or owner or design %}<a href="{% url 'inventory-list' %}" class="btn btn-ghost">Clear</a>{% endif %}
 </form>
 
 {% comment %}Sortable header macro via with blocks{% endcomment %}
@@ -185,6 +192,11 @@ dialog.modal::backdrop { background: rgba(20,23,34,.45); }
           </a>
         </th>
         {% endwith %}
+        <!-- Not sortable: whether/where an instance is installed comes from
+             a prefetched reverse relation (design_installations), not a
+             plain model field, so it doesn't fit the col=/sort_qs sorting
+             macro used by the other headers above. -->
+        <th>Used In Design</th>
         {% with col="group" label="Group" %}
         <th class="th-sort">
           <a href="?{{ cqs }}&sort={{ col }}&dir={% if csort == col and cdir == 'asc' %}desc{% else %}asc{% endif %}">
@@ -216,12 +228,21 @@ dialog.modal::backdrop { background: rgba(20,23,34,.45); }
         <td>{% if inst.technical_system %}<span class="tag">{{ inst.technical_system }}</span>{% else %}—{% endif %}</td>
         <td><span style="font-family:monospace;font-size:12px">{{ inst.serial_number|default:"—" }}</span></td>
         <td style="font-size:12.5px">{{ inst.location|default:"—" }}</td>
+        <td style="font-size:12.5px">
+          {% with dei=inst.design_installations.all|first %}
+          {% if dei %}
+          <a href="{% url 'design-detail' dei.element.design.pk %}" style="color:var(--accent)" onclick="event.stopPropagation()">{{ dei.element.design.name }}</a>
+          {% else %}
+          —
+          {% endif %}
+          {% endwith %}
+        </td>
         <td>{% if inst.owner_group %}<span class="tag gray">{{ inst.owner_group }}</span>{% else %}—{% endif %}</td>
         <td style="font-size:12.5px">{% if inst.owner_user %}{{ inst.owner_user.get_full_name|default:inst.owner_user.username }}{% else %}—{% endif %}</td>
         <td style="font-size:12px;color:var(--muted)">{{ inst.created_on|date:"Y-m-d" }}</td>
       </tr>
       {% empty %}
-      <tr><td colspan="8"><div class="empty">No instances found{% if q %} for "{{ q }}"{% endif %}</div></td></tr>
+      <tr><td colspan="9"><div class="empty">No instances found{% if q %} for "{{ q }}"{% endif %}</div></td></tr>
       {% endfor %}
     </tbody>
   </table>

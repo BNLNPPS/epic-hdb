@@ -649,13 +649,14 @@ def inventory_list(request):
     system      = request.GET.get('system', '')
     group       = request.GET.get('group', '')
     owner       = request.GET.get('owner', '')
+    design      = request.GET.get('design', '')
     sort        = request.GET.get('sort', 'component')
     direction   = request.GET.get('dir', 'asc')
 
     qs = ComponentInstance.objects.select_related(
         'component', 'component__technical_system',
         'location', 'location__institution', 'owner_group', 'owner_user',
-    )
+    ).prefetch_related('design_installations__element__design')
     if q:
         qs = qs.filter(
             Q(tag__icontains=q) |
@@ -669,6 +670,14 @@ def inventory_list(request):
         qs = qs.filter(owner_group__name=group)
     if owner:
         qs = qs.filter(owner_user__username=owner)
+    # 'unassigned' is a sentinel, not a Design pk -- it selects instances
+    # with no row in the reverse design_installations relation at all
+    # (never installed anywhere), the same relation the "Used In Design"
+    # column reads. Any other non-empty value is a real Design pk.
+    if design == 'unassigned':
+        qs = qs.filter(design_installations__isnull=True)
+    elif design:
+        qs = qs.filter(design_installations__element__design_id=design)
 
     _sort_map = {
         'tag':       'tag',
@@ -701,6 +710,7 @@ def inventory_list(request):
         'system':       system,
         'group':        group,
         'owner':        owner,
+        'design':       design,
         'sort':         sort,
         'dir':          direction,
         'sort_qs':      sort_qs,
@@ -720,6 +730,7 @@ def inventory_list(request):
             else Component.objects.filter(owner_group_id__in=user_group_ids).order_by('name')
         ),
         'locations':       Location.objects.select_related('institution').order_by('name'),
+        'designs':         Design.objects.order_by('name'),
         'show_add_button': True,
         'form_error':      form_error,
         'form_data':       form_data,
