@@ -124,7 +124,8 @@
       </div>
       <p style="font-size:11.5px;color:var(--muted);margin:0 0 10px">
         Defined in YAML and loaded via <span class="mono-code">hdb load-template</span> -- see
-        <span class="mono-code">client/README.md</span>. Placeholders can no longer be added from this page.
+        <span class="mono-code">client/README.md</span>. This table is read-only: placeholders can
+        no longer be added, edited, or removed from this page -- edit the YAML and re-upload it instead.
       </p>
       {% if template.elements.all %}
       <div class="table-wrap" style="margin:0">
@@ -134,7 +135,6 @@
               <th>Placeholder</th>
               <th>Points To</th>
               <th>Quantity</th>
-              {% if can_edit %}<th></th>{% endif %}
             </tr>
           </thead>
           <tbody>
@@ -153,25 +153,7 @@
                 {% if el.component.model_number %}<span class="mono-code" style="margin-left:4px">{{ el.component.model_number }}</span>{% endif %}
                 {% endif %}
               </td>
-              <td>
-                {% if can_edit %}
-                <form method="post" action="{% url 'template-element-update' template.pk el.pk %}" style="display:flex;gap:5px;align-items:center;margin:0">
-                  {% csrf_token %}
-                  <input type="number" name="quantity" value="{{ el.quantity }}" min="1" style="width:60px;padding:4px 7px;border:1px solid var(--border);border-radius:6px;font-size:12.5px;color:var(--text);background:var(--surface)">
-                  <button type="submit" title="Save quantity" style="background:none;border:1px solid var(--border);border-radius:6px;color:var(--accent);cursor:pointer;font-size:11.5px;padding:4px 8px;font-weight:600">Save</button>
-                </form>
-                {% else %}
-                ×{{ el.quantity }}
-                {% endif %}
-              </td>
-              {% if can_edit %}
-              <td style="text-align:right">
-                <form method="post" action="{% url 'template-element-delete' template.pk el.pk %}" style="margin:0" onsubmit="return confirm('Remove placeholder {{ el.element_name }}?')">
-                  {% csrf_token %}
-                  <button type="submit" title="Remove placeholder" style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:14px;padding:0 4px">×</button>
-                </form>
-              </td>
-              {% endif %}
+              <td>×{{ el.quantity }}</td>
             </tr>
             {% endfor %}
           </tbody>
@@ -251,9 +233,8 @@
 // Breadcrumb "alternate parent" popovers: at most one open at a time,
 // and clicking anywhere outside a popover closes it -- native <details>
 // on its own leaves every opened one open forever, which gets confusing
-// fast with several ambiguous (diamond-shaped) slots in one trail. Not
-// gated on can_edit -- this is a read-only navigation feature, usable by
-// anyone viewing the page regardless of edit permission.
+// fast with several ambiguous (diamond-shaped) slots in one trail. A
+// read-only navigation feature, usable by anyone viewing the page.
 (function () {
   var alts = document.querySelectorAll('.tpl-breadcrumb details.crumb-alt');
   alts.forEach(function (d) {

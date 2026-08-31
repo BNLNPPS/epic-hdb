@@ -1639,19 +1639,21 @@ def template_detail(request, pk):
     the hierarchy breadcrumb, and template metadata (nesting levels,
     product_component, etc).
 
-    Placeholders can no longer be *added* here -- design template
-    hierarchies are now defined in YAML and loaded via hdb_client /
-    the "hdb load-template" CLI command (see client/README.md), so that
-    a git-tracked YAML file is always the single source of truth and the
-    database can never quietly drift from it. This view now only serves
-    GET; a stray POST (an old bookmark, a saved form) gets a clean 405
-    rather than silently doing nothing while looking like it worked, or
-    -- worse -- silently succeeding the way it used to.
-
-    Per-row quantity editing and placeholder removal (template_element_
-    update / template_element_delete below) are, for now, still reachable
-    for owner_group members -- only *adding* a placeholder was removed in
-    this pass. See those views' docstrings."""
+    The placeholder table is entirely read-only now -- adding, editing
+    a quantity, and removing a placeholder (the old template_element_
+    update / template_element_delete views) have all been removed.
+    Design template hierarchies are defined in YAML and loaded via
+    hdb_client / the "hdb load-template" CLI command (see
+    client/README.md), so that a git-tracked YAML file is always the
+    single source of truth and the database can never quietly drift
+    from it -- a per-row quantity edit doesn't survive a re-upload the
+    way a re-added placeholder does (get_or_create's defaults= only
+    apply on row creation), so letting the web UI touch it independently
+    was a silent, permanent fork of the file's numbers.
+    This view now only serves GET; a stray POST (an old bookmark, a
+    saved form) gets a clean 405 rather than silently doing nothing
+    while looking like it worked, or -- worse -- silently succeeding
+    the way it used to."""
     if request.method != 'GET':
         return HttpResponseNotAllowed(['GET'])
 
@@ -1661,28 +1663,23 @@ def template_detail(request, pk):
         pk=pk,
     )
 
-    user_group_ids = set(request.user.groups.values_list('id', flat=True))
-    is_member = (
-        (bool(template.owner_group_id) and template.owner_group_id in user_group_ids)
-        or request.user.is_superuser
-    )
     # Once at least one Design has been instantiated from a template, the
     # template becomes immutable: those designs were created from a specific
     # bill of placeholders, and letting the template drift afterwards would
     # make "instantiated from BEMC tower" mean different things at different
-    # times. Editing tools disappear for everyone; a fresh template with no
-    # designs yet stays fully editable.
+    # times. Surfaced as a banner below; editing the placeholder table
+    # itself is no longer possible from the web UI regardless (see above).
     is_locked = template.designs.exists()
-    can_edit  = is_member and not is_locked
     # A template referenced as another template's child_template placeholder
     # can't be deleted either (child_template is PROTECTed -- see the model)
     # -- surfaced here too so the "Delete Template" button is hidden for the
     # same reason it's hidden for is_locked, rather than only failing on the
     # POST itself.
     is_referenced = template.parent_elements.exists()
-    # Deletion is a stricter, separate permission from editing: any
-    # owner_group member may edit surviving placeholders, but only a
-    # superuser may delete the template outright (see template_delete below).
+    # Deletion is still a live web-UI action, restricted to superusers only
+    # (unlike the removed per-row edits, deleting the whole template doesn't
+    # let the DB drift from any YAML -- there's nothing left to disagree
+    # with the file about).
     can_delete = request.user.is_superuser and not is_locked and not is_referenced
 
     # Breadcrumb: this template's place in the nesting hierarchy, root
@@ -1690,7 +1687,7 @@ def template_detail(request, pk):
     # slot where more than one template could legally sit (a "diamond"
     # shape, see DesignTemplate.parent_templates), the alternatives too,
     # so the trail never silently hides an ambiguous parent. This is a
-    # read-only feature, so it's computed regardless of can_edit.
+    # read-only feature.
     breadcrumb_ancestors = template.breadcrumb_ancestors()
 
     # Completeness: whether every placeholder anywhere beneath this
@@ -1706,7 +1703,6 @@ def template_detail(request, pk):
 
     context = {
         'template':             template,
-        'can_edit':             can_edit,
         'can_delete':           can_delete,
         'is_locked':            is_locked,
         'is_referenced':        is_referenced,
@@ -1753,63 +1749,6 @@ def template_delete(request, pk):
             return redirect('template-detail', pk=template.pk)
         template.delete()
         return redirect('template-list')
-
-    return redirect('template-detail', pk=template.pk)
-
-
-@login_required
-def template_element_update(request, pk, element_id):
-    """Inline-edit a template placeholder's quantity. Owner-group members
-    (or superusers) only; 403 otherwise. Invalid quantities fall back to 1;
-    quantity is the only editable field -- changing what component a
-    placeholder points at is delete-and-recreate, deliberately, so it can't
-    drift silently under designs already instantiated from the template."""
-    template = get_object_or_404(DesignTemplate, pk=pk)
-    element = get_object_or_404(DesignTemplateElement, pk=element_id, template=template)
-
-    user_group_ids = set(request.user.groups.values_list('id', flat=True))
-    is_member = (
-        (bool(template.owner_group_id) and template.owner_group_id in user_group_ids)
-        or request.user.is_superuser
-    )
-
-    if request.method == 'POST':
-        if not is_member:
-            return HttpResponseForbidden("You don't have permission to edit this template.")
-        if template.designs.exists():
-            # Template frozen once designs exist -- see template_detail.
-            return redirect('template-detail', pk=template.pk)
-        try:
-            element.quantity = max(int(request.POST.get('quantity', element.quantity)), 1)
-            element.save()
-        except (TypeError, ValueError):
-            pass
-
-    return redirect('template-detail', pk=template.pk)
-
-
-@login_required
-def template_element_delete(request, pk, element_id):
-    """Remove a placeholder from a template. Owner-group members (or
-    superusers) only; 403 otherwise. Existing designs instantiated earlier
-    are unaffected -- they own real DesignElement copies, not references to
-    the template's rows."""
-    template = get_object_or_404(DesignTemplate, pk=pk)
-    element = get_object_or_404(DesignTemplateElement, pk=element_id, template=template)
-
-    user_group_ids = set(request.user.groups.values_list('id', flat=True))
-    is_member = (
-        (bool(template.owner_group_id) and template.owner_group_id in user_group_ids)
-        or request.user.is_superuser
-    )
-
-    if request.method == 'POST':
-        if not is_member:
-            return HttpResponseForbidden("You don't have permission to edit this template.")
-        if template.designs.exists():
-            # Template frozen once designs exist -- see template_detail.
-            return redirect('template-detail', pk=template.pk)
-        element.delete()
 
     return redirect('template-detail', pk=template.pk)
 

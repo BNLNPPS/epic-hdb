@@ -452,13 +452,28 @@ Deleted template 'BTOF Stavelet'.
 
 `--yes` skips the interactive confirmation prompt (useful for scripting).
 Deleting a template that's still referenced as another template's
-`child_template` placeholder now fails with a clear error instead — remove
-that placeholder (`template_element_delete` / `template.elements...delete()`)
-or delete the referencing template first:
+`child_template` placeholder now fails with a clear error instead:
 
 ```
 $ python client/hdb.py --user maxim delete-template "BTOF Stavelet" --yes
 Error: Design template 'BTOF Stavelet' is nested as a sub-template inside: BTOF Half-Stave. Remove that placeholder (or the referencing template) first.
+```
+
+Delete the referencing template instead, or -- if only that one placeholder
+needs to go -- remove it directly. There's no web UI or CLI command for
+removing a single placeholder (the old per-row "Save"/"×" controls on the
+template detail page were removed — they wrote straight to the database and
+could silently fork from the YAML file, see the Design Templates section
+above); do it from the Django shell instead:
+
+```bash
+PYTHONPATH=client python manage.py shell
+```
+```python
+from hdb.models import DesignTemplateElement
+DesignTemplateElement.objects.get(
+    template__name="BTOF Half-Stave", element_name="Stavelet Modules"
+).delete()
 ```
 
 ```python
