@@ -96,8 +96,15 @@ epic-hdb/
 
 ## Quick Start
 
-**Requirements:** Python 3.10+, Django 4.x or 5.x, plus `qrcode[pil]` (the
+**Requirements:** Python 3.12+, Django 6.0.x, plus `qrcode[pil]` (the
 web UI's inventory QR-code page needs it — everything else only needs Django).
+
+> Upgraded from Python 3.10 / Django 5.2 to Python 3.12 / Django 6.0.8 in
+> 2026-08. The codebase needed one code change for the jump to Django 6
+> (`CheckConstraint`'s `check=` argument was removed in favor of
+> `condition=`); everything else carried over unchanged. To set up a
+> matching Python 3.12 environment via `uv`, see `setup_py312_env.sh` and
+> `requirements-py312.txt` in the project root.
 
 ```bash
 pip install django "qrcode[pil]"

@@ -738,7 +738,7 @@ class DesignTemplateElement(models.Model):
         unique_together = [("template", "element_name")]
         constraints = [
             models.CheckConstraint(
-                check=(
+                condition=(
                     models.Q(component__isnull=False, child_template__isnull=True, child_template_name="") |
                     (models.Q(component__isnull=True) & ~models.Q(child_template_name=""))
                 ),
