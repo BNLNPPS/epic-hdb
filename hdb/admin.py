@@ -159,11 +159,23 @@ class DesignTemplateAdmin(admin.ModelAdmin):
     # chain), not a DB column -- fine to compute once for a single object's
     # change form, deliberately kept out of list_display where it would run
     # once per row on every paginated admin list page.
-    readonly_fields = ("pk", "created_on", "modified_on", "nesting_levels")
+    #
+    # source_path/source_sha256/source_git_commit are read-only here on
+    # purpose: they're an audit trail stamped automatically by
+    # DesignClient.load_templates_from_yaml() on every load (see
+    # hdb/models.py and client/README.md's "Provenance and drift
+    # detection") -- hand-editing them in admin would just misrepresent
+    # where a template actually came from. Use `hdb verify-template` to
+    # check a tracked YAML file against what's live, not this form.
+    readonly_fields = (
+        "pk", "created_on", "modified_on", "nesting_levels",
+        "source_path", "source_sha256", "source_git_commit",
+    )
     inlines         = [DesignTemplateElementInline]
     fieldsets = (
         ("Identity",  {"fields": ("pk", "name", "description", "project", "nesting_levels", "product_component")}),
         ("Ownership", {"fields": ("owner_user", "owner_group", "group_writeable", "created_by", "created_on", "modified_by", "modified_on"), "classes": ("collapse",)}),
+        ("Source Provenance", {"fields": ("source_path", "source_sha256", "source_git_commit"), "classes": ("collapse",)}),
     )
 
     @admin.display(description="# Placeholders")

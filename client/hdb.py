@@ -21,7 +21,9 @@ Commands
   find           <TYPE> <PAT>   List items matching a wildcard pattern
   create-instance               Create a new ComponentInstance
   load-template  <FILE>         Load DesignTemplate(s) from a YAML file
+  verify-template <FILE>        Compare a YAML file against the live database, no writes
   bom-template   <NAME>         Recursive parts explosion for a template
+  subsystem-hash <NAME>         Composite fingerprint over a template and everything beneath it
   delete-template <NAME>        Delete an unlocked DesignTemplate (superuser-only)
 
 Options
@@ -286,6 +288,73 @@ def cmd_load_template(client, args):
             print(f"  - {c['template']} / {c['element_name']} -> {c['child_template_name']}: {c['reason']}", file=sys.stderr)
 
 
+def cmd_verify_template(client, args):
+    """Compare a YAML file against what's actually live in the database --
+    read-only, never writes anything.
+
+    Catches two different things: (1) the file has changed since it was
+    last loaded (run load-template to pick that up -- not itself an
+    error), and (2) the live database disagrees with what the file
+    currently says, which load-template *won't* fix on its own for an
+    already-existing row (get_or_create's defaults= only apply on
+    creation) -- this is what actually matters, since it's the signature
+    of a quantity edited via Django admin or the ORM/shell, drifting
+    silently away from the tracked source. Exits non-zero (and prints
+    nothing to stdout beyond the report) only for case (2).
+
+    Examples
+    --------
+      bin/hdb verify-template data/btof_split/btof_stave.yaml
+      bin/hdb verify-template btof_split/btof_stavelet.yaml
+    """
+    path = _data_path(args, args.file)
+    try:
+        outcome = client.designs.verify_templates_from_yaml(path)
+    except FileNotFoundError:
+        print(f"Error: file not found: {args.file!r} (looked in cwd and data/)", file=sys.stderr)
+        sys.exit(1)
+    except Exception as exc:
+        print(f"Error verifying template(s): {exc}", file=sys.stderr)
+        sys.exit(1)
+
+    if args.yaml:
+        _yaml(outcome)
+        sys.exit(1 if outcome["has_drift"] else 0)
+
+    for r in outcome["templates"]:
+        print(f"Template {r['name']!r}:", end=" ")
+        if not r["in_db"]:
+            print("NOT LOADED -- run load-template first")
+            continue
+        clean = not r["field_diffs"] and not r["db_only_elements"] and not any(
+            el["field_diffs"] for el in r["elements"]
+        )
+        status_bits = []
+        if r["file_changed_since_load"]:
+            status_bits.append("file changed since last load")
+        if clean:
+            status_bits.append("matches database")
+        print('; '.join(status_bits) if status_bits else "checked")
+
+        for field, diff in r["field_diffs"].items():
+            print(f"    DRIFT: {field}: yaml={diff['yaml']!r} db={diff['db']!r}")
+        for el in r["elements"]:
+            if not el["in_db"]:
+                print(f"    NOT LOADED: placeholder {el['element_name']!r} (in file, missing from database)")
+                continue
+            for field, diff in el["field_diffs"].items():
+                print(f"    DRIFT: {el['element_name']!r}.{field}: yaml={diff['yaml']!r} db={diff['db']!r}")
+        for extra in r["db_only_elements"]:
+            print(f"    DRIFT: placeholder {extra!r} is in the database but not in this file")
+
+    if outcome["has_drift"]:
+        print("\nWARNING: database disagrees with this file -- see DRIFT lines above. "
+              "Re-running load-template will NOT fix an existing row's mismatched fields "
+              "(only creates what's missing); fix it by hand (Django shell) or accept the "
+              "file as no longer authoritative for that value.", file=sys.stderr)
+        sys.exit(1)
+
+
 def cmd_bom_template(client, args):
     name = " ".join(args.name)
     try:
@@ -306,6 +375,51 @@ def cmd_bom_template(client, args):
                 _print(row.get("children", []), indent + 1)
         _print(data)
 
+
+def cmd_subsystem_hash(client, args):
+    """Composite fingerprint over a template and everything beneath it --
+    see hdb/models.py's DesignTemplate.subsystem_fingerprint() for the
+    full rationale. Read-only, no writes.
+
+    Only meaningful once the whole subtree is complete (no un-uploaded
+    sub-template still pending anywhere) -- prints a clear message and
+    exits 1 rather than a fingerprint if it isn't.
+
+    Examples
+    --------
+      bin/hdb subsystem-hash "BTOF Stave"
+      bin/hdb subsystem-hash "BEMC tower"
+    """
+    name = " ".join(args.name)
+    try:
+        result = client.designs.subsystem_fingerprint(name=name)
+    except Exception as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+    if args.yaml:
+        _yaml(result)
+        if not result["complete"]:
+            sys.exit(1)
+        return
+
+    if not result["complete"]:
+        print(f"{name!r} is not complete -- no fingerprint (some sub-template, "
+              f"somewhere in its tree, hasn't been uploaded yet). See its template "
+              f"detail page, or `hdb bom-template`, for what's still pending.")
+        sys.exit(1)
+
+    print(f"{name!r}: {result['fingerprint']}")
+    print(f"  ({len(result['templates'])} template(s) in this subtree)")
+    for t in result["templates"]:
+        note = "" if t["source_sha256"] else "  [never loaded from a YAML file -- see missing_provenance]"
+        print(f"    {t['name']}: {t['source_sha256'] or '(no recorded source)'}{note}")
+    if result["missing_provenance"]:
+        print(f"\nNote: {len(result['missing_provenance'])} of the above have no recorded "
+              f"source file (created via seed_hdb, admin, or the shell rather than "
+              f"load-template) -- this fingerprint reflects their current state, but it "
+              f"can't tell you whether that state matches any particular version of a "
+              f"tracked YAML file.", file=sys.stderr)
 
 
 def cmd_delete_template(client, args):
@@ -627,8 +741,17 @@ def build_parser():
     sp.add_argument("file", metavar="FILE",
                     help="YAML file, resolved against cwd then <project root>/data/")
 
+    sp = sub.add_parser("verify-template",
+                        help="Compare a YAML file against the live database -- read-only, no writes")
+    sp.add_argument("file", metavar="FILE",
+                    help="YAML file, resolved against cwd then <project root>/data/")
+
     sp = sub.add_parser("bom-template",
                         help="Recursive parts explosion for a DesignTemplate")
+    sp.add_argument("name", nargs="+", metavar="TEMPLATE_NAME")
+
+    sp = sub.add_parser("subsystem-hash",
+                        help="Composite fingerprint over a template and everything beneath it")
     sp.add_argument("name", nargs="+", metavar="TEMPLATE_NAME")
 
     sp = sub.add_parser("delete-template",
@@ -656,7 +779,9 @@ COMMANDS = {
     "find":          cmd_find,
     "create-instance": cmd_create_instance,
     "load-template": cmd_load_template,
+    "verify-template": cmd_verify_template,
     "bom-template":  cmd_bom_template,
+    "subsystem-hash": cmd_subsystem_hash,
     "delete-template": cmd_delete_template,
 }
 

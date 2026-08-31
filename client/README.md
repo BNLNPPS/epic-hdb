@@ -275,7 +275,7 @@ for what a `DesignTemplate` is and how multi-level hierarchies work; this
 section covers the mechanics of loading one from a YAML file.
 
 ```python
-client.designs.load_templates_from_yaml("data/btof_stave_templates.yaml")
+client.designs.load_templates_from_yaml("data/btof_split/btof_stave.yaml")
 # -> {"templates": [ per-template summary dicts, one per document:
 #       {"template": "BTOF Stavelet", "template_created": True,
 #        "elements": [{"element_name": "AC-LGAD Sensors", "component": "AC-LGAD Sensor",
@@ -373,11 +373,133 @@ templates:
                                            # above if it's uploaded later.
 ```
 
-See `data/btof_stave_templates.yaml` for the full, real worked example: the
-ePIC Barrel Time-of-Flight (BTOF) detector's Stave → Half-Stave → Stavelet
-hierarchy, with dimensions, sensor/ASIC counts, and timing/spatial
-resolution sourced from public ePIC BTOF status talks (cited in the file's
-header comment).
+See `data/btof_split/` for the full, real worked example: the ePIC
+Barrel Time-of-Flight (BTOF) detector's Stave → Half-Stave → Stavelet
+hierarchy, split one template per file (see `data/btof_split/README.md`),
+with dimensions, sensor/ASIC counts, and timing/spatial resolution sourced
+from public ePIC BTOF status talks. `data/btof_stave_templates.yaml` is
+the original, now-**deprecated** monolithic version of the same three
+templates -- kept only for its sourcing citations, not for loading; see
+its header comment.
+
+### Provenance and drift detection
+
+Every successful `load_templates_from_yaml()` / `load-template` call
+stamps three fields on each `DesignTemplate` it touches, automatically —
+no separate step:
+
+| Field | What it records |
+|---|---|
+| `source_path` | The YAML file's path, relative to the repo root when the file is inside a git checkout |
+| `source_sha256` | SHA-256 of that file's exact content at the moment of this load |
+| `source_git_commit` | `git rev-parse HEAD` of the repo at load time, best-effort (blank if the file isn't in a git checkout, or git isn't installed) |
+
+These re-stamp on every load, including a no-op re-load of an
+already-existing template, so they always describe the most recent load
+attempt, not just whichever load happened to create the row. They answer
+"exactly which file, and which version of it, produced this template" —
+useful on their own, and the basis for the drift check below.
+
+**Why a git *commit* hash isn't the primary mechanism here, even though
+that's the obvious first idea**: git has no built-in way to keep a
+commit hash *in* a file's own content that updates itself automatically —
+the closest built-in features are the `ident` gitattribute (expands a
+literal `$Id$` placeholder to the file's own **blob** hash, but only on
+`git checkout`/`clone`, not on every edit or commit, so a file you've
+just edited but not yet committed shows a stale value until the next
+checkout) and `export-subst` (expands `$Format:%H$` to the commit hash,
+but only inside `git archive` output, not in the working tree at all).
+Neither actually gives an always-current, zero-extra-step answer sitting
+in the file. Computing the hash freshly at load time, in Python, with no
+dependency on git being installed or the file being tracked at all, does —
+so that's what's implemented, with the git commit captured alongside it
+as a best-effort bonus, not the primary signal.
+
+**`verify-template FILE`** (`client.designs.verify_templates_from_yaml()`)
+is the enforcement half: it re-parses a YAML file exactly like
+`load-template` would, but never writes anything, and reports any
+mismatch between what the file currently says and what's actually live —
+catching drift regardless of how it happened (a Django admin edit, a
+direct ORM/shell change, or simply a file that's been edited but not
+re-loaded). `load-template` alone can't catch this, because
+`get_or_create`'s `defaults=` only apply when a row is first created —
+re-running it against an already-existing, since-edited row is a silent
+no-op.
+
+Illustrative output (not a captured run, unlike the other examples in this
+file -- shown to demonstrate the report format):
+
+```
+$ python client/hdb.py verify-template data/btof_split/btof_stave.yaml
+Template 'BTOF Stave': matches database
+
+$ python client/hdb.py verify-template data/btof_split/btof_half_stave.yaml
+Template 'BTOF Half-Stave': checked
+    DRIFT: 'Stavelet Modules'.quantity: yaml=8 db=6
+
+WARNING: database disagrees with this file -- see DRIFT lines above. Re-running
+load-template will NOT fix an existing row's mismatched fields (only creates
+what's missing); fix it by hand (Django shell) or accept the file as no longer
+authoritative for that value.
+```
+
+Exits `1` if any real drift is found (safe to use in a script or CI step),
+`0` otherwise. "File changed since last load" is reported too, but is
+purely informational — it doesn't affect the exit code, since it just
+means "run `load-template` again," not that anything is actually wrong.
+
+**`subsystem-hash NAME`** (`client.designs.subsystem_fingerprint()` /
+`DesignTemplate.subsystem_fingerprint()`) answers a different question:
+not "does this one file match the database" but "is this whole subtree,
+as a unit, the same as some other known state" — a single composite hash
+over a named template and everything beneath it (via
+`descendant_template_ids()`), derived from each one's own
+`source_sha256`. It's a summary computed *from* the per-template vector,
+not a replacement for it — `verify-template` is still what tells you
+*which* piece disagrees; this is what lets you compare "the whole BTOF
+subsystem" as one value instead of eyeballing three hashes.
+
+Only meaningful once the whole subtree is **complete** (see
+`DesignTemplate.is_complete()`) — a fingerprint of a subtree still
+waiting on an un-uploaded sub-template would describe a provisional
+state, not a real one, so both the model method and this command return
+"not complete, no fingerprint" instead. Computed fresh on every call
+(model-method and web page alike), never cached — if a descendant's
+`source_sha256` changes, or the tree's structure changes, the very next
+call already reflects it.
+
+```
+$ python client/hdb.py subsystem-hash "BTOF Stave"
+'BTOF Stave': 7a2c9e...f01b  (64 hex chars)
+  (3 template(s) in this subtree)
+    BTOF Half-Stave: 4f8b1a...
+    BTOF Stave: 7a2c9e...
+    BTOF Stavelet: c910de...
+
+$ python client/hdb.py subsystem-hash "BEMC tower"
+'BEMC tower': 9d4e21...  (64 hex chars)
+  (1 template(s) in this subtree)
+    BEMC tower: (no recorded source)  [never loaded from a YAML file -- see missing_provenance]
+
+Note: 1 of the above have no recorded source file (created via seed_hdb, admin,
+or the shell rather than load-template) -- this fingerprint reflects their
+current state, but it can't tell you whether that state matches any particular
+version of a tracked YAML file.
+```
+
+(Illustrative — not a captured run.) The `BEMC tower` case above is worth
+having in mind before using it as a test: it's a flat, single-node
+template (two `component` placeholders, no `child_template` nesting), and
+it predates the provenance system (created by `seed_hdb`, so its
+`source_sha256` has always been empty). It's a fine smoke test that the
+mechanism works end-to-end — complete → fingerprint, gated correctly —
+but it won't exercise the multi-template composite case that motivated
+this feature the way `BTOF Stave` (three templates, all loaded via
+`load-template`, real `source_sha256` values) does.
+
+Shown on the template detail page too, in the same field-group style as
+Nesting Levels — but only when the template is complete; nothing is
+shown otherwise, same as `pending_placeholders`.
 
 ### `hdb.py` commands
 

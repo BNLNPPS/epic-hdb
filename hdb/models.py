@@ -5,6 +5,7 @@ Supporting: Institution, Location, Ownership, Properties, Logs.
 Groups use Django's built-in auth.Group.
 """
 
+import hashlib
 import uuid
 from django.core.exceptions import ValidationError
 from django.db import models
@@ -421,6 +422,42 @@ class DesignTemplate(OwnedModel):
                    "(one is 'what do I contain', the other is 'what am I, once built').",
     )
 
+    # -- Source-file provenance -----------------------------------------
+    # Populated automatically by DesignClient.load_templates_from_yaml()
+    # on every load (whether or not the load actually changed anything --
+    # a no-op re-load still re-stamps these, so they always describe the
+    # most recent load attempt, not just the load that created the row).
+    # Blank for templates created any other way (create_template() called
+    # directly with no file behind it, e.g. from the MCP server or a
+    # script). None of this is enforced -- a template can still be edited
+    # or created without going through a file at all -- it's a record of
+    # "if this came from a file, here's exactly which one", used by
+    # `hdb verify-template` to detect drift between a tracked YAML file
+    # and what's actually live. See client/README.md.
+    source_path = models.CharField(
+        max_length=512, blank=True, default="",
+        help_text="Path to the YAML file this template was last loaded from, as given to "
+                   "load-template (relative to the repo root when the file is inside a git "
+                   "checkout, otherwise as passed).",
+    )
+    source_sha256 = models.CharField(
+        max_length=64, blank=True, default="",
+        help_text="SHA-256 of source_path's exact file content at the time of the most "
+                   "recent load. Compared against the file's current hash by "
+                   "`hdb verify-template` to tell 'file changed since last load' apart from "
+                   "'database was edited some other way'.",
+    )
+    source_git_commit = models.CharField(
+        max_length=40, blank=True, default="",
+        help_text="`git rev-parse HEAD` of the repository containing source_path, captured "
+                   "at load time on a best-effort basis (blank if the file isn't inside a "
+                   "git checkout, or git isn't available). Describes the repo state the load "
+                   "was run from -- NOT a guarantee source_path itself was committed at that "
+                   "commit; a dirty working tree at load time still records HEAD, so treat "
+                   "this as 'roughly when/where', not as a cryptographic proof by itself -- "
+                   "source_sha256 is the one that's exact.",
+    )
+
     def save(self, *args, **kwargs):
         if not self.id:
             self.id = str(uuid.uuid4())
@@ -556,6 +593,63 @@ class DesignTemplate(OwnedModel):
             el for el in self.elements.all()
             if el.child_template_id is None and el.child_template_name
         ]
+
+    def subsystem_fingerprint(self):
+        """A single hash summarizing this template AND every template
+        beneath it (via descendant_template_ids()), derived from each
+        one's own source_sha256 -- see client/README.md's "Provenance and
+        drift detection". Answers "is this whole subtree, as a unit, the
+        same as some other known state" without losing the per-template
+        precision source_sha256 already provides -- this is a summary
+        computed FROM that vector, not a replacement for it (see the
+        `hdb subsystem-hash` CLI command).
+
+        Returns None if this template isn't complete (see is_complete())
+        -- a fingerprint of a subtree that's still waiting on an
+        un-uploaded sub-template would describe a provisional, half-built
+        state, not a real one; there's nothing meaningful to compare it
+        against. Like is_complete(), computed fresh on every call rather
+        than stored, so it can never go stale the way a cached column
+        would -- if a descendant's source_sha256 changes (a re-load with
+        new content) or the tree structure itself changes, the very next
+        call already reflects that.
+
+        Otherwise returns:
+            {
+              "fingerprint": <sha256 hex digest>,
+              "templates": [{"name": str, "source_sha256": str}, ...],
+                  # this template + every descendant, name-sorted -- the
+                  # exact, ordered input the fingerprint was computed from
+              "missing_provenance": [str, ...],
+                  # names, if any, of templates in this subtree that have
+                  # never been loaded via load_templates_from_yaml() (an
+                  # empty source_sha256 -- e.g. created via seed_hdb or
+                  # directly in admin/shell). Their "" hash still
+                  # contributes deterministically to the fingerprint, but
+                  # a fingerprint that includes one of these isn't backed
+                  # by a tracked file for that piece -- it can't tell you
+                  # "matches version X of the YAML", only "matches what
+                  # was here last time you fingerprinted it".
+            }
+
+        Ordering (name-sorted) and format ("name:source_sha256" pairs,
+        joined with "|") are fixed and internal -- don't parse the digest
+        input back out of this; compare "fingerprint" values directly, or
+        diff "templates" lists element-by-element for exactly which piece
+        changed.
+        """
+        if not self.is_complete():
+            return None
+        ids = {self.pk} | self.descendant_template_ids()
+        templates = list(
+            DesignTemplate.objects.filter(pk__in=ids).order_by("name")
+        )
+        digest_input = "|".join(f"{t.name}:{t.source_sha256}" for t in templates)
+        return {
+            "fingerprint": hashlib.sha256(digest_input.encode()).hexdigest(),
+            "templates": [{"name": t.name, "source_sha256": t.source_sha256} for t in templates],
+            "missing_provenance": [t.name for t in templates if not t.source_sha256],
+        }
 
     def parent_templates(self):
         """Distinct DesignTemplates that reference this one as a

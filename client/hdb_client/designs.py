@@ -17,6 +17,72 @@ def _clamp(limit: int) -> int:
     return max(1, min(int(limit), MAX_LIMIT))
 
 
+# ---------------------------------------------------------------------------
+# Source-file provenance helpers for load_templates_from_yaml() /
+# verify_templates_from_yaml() -- see DesignTemplate.source_path/
+# source_sha256/source_git_commit in hdb/models.py for what these feed.
+# Deliberately independent of git: sha256 is plain file-content hashing
+# (hashlib, no subprocess), so it works identically whether or not the
+# file happens to be inside a git checkout, on a machine with git
+# installed, or in a clean vs. dirty working tree. Only the commit-hash
+# lookup below actually shells out to git, and it's best-effort -- every
+# failure mode (git missing, file not in a repo, git not on PATH) just
+# leaves source_git_commit blank rather than failing the load.
+# ---------------------------------------------------------------------------
+
+def _file_sha256(path) -> str:
+    """SHA-256 hex digest of a file's exact raw bytes."""
+    import hashlib
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(65536), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _git_commit_for(path) -> str:
+    """Best-effort `git rev-parse HEAD` of the repo containing path, run
+    from path's own directory so it works regardless of the caller's cwd.
+    Returns "" (never raises) if git isn't installed, the file isn't
+    inside a git working tree, or anything else goes wrong -- this is a
+    convenience for provenance, not something a load should ever fail
+    over."""
+    import os
+    import subprocess
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=os.path.dirname(os.path.abspath(path)) or ".",
+            capture_output=True, text=True, timeout=5,
+        )
+        return result.stdout.strip() if result.returncode == 0 else ""
+    except Exception:
+        return ""
+
+
+def _git_relative_path(path) -> str:
+    """path, rewritten relative to its git repo's root when it's inside
+    one (e.g. "data/btof_split/btof_stave.yaml" instead of an absolute or
+    cwd-relative path that only makes sense on the machine that ran the
+    load) -- falls back to path unchanged (as given to the loader) if git
+    can't resolve it."""
+    import os
+    import subprocess
+    try:
+        abspath = os.path.abspath(path)
+        result = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            cwd=os.path.dirname(abspath) or ".",
+            capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode != 0:
+            return str(path)
+        toplevel = result.stdout.strip()
+        return os.path.relpath(abspath, toplevel)
+    except Exception:
+        return str(path)
+
+
 class DesignClient:
     def __init__(self, user=None):
         self.user = user
@@ -111,6 +177,21 @@ class DesignClient:
             return qs.get(pk=pk)
         return qs.get(name=name)
 
+    def subsystem_fingerprint(self, name: str | None = None, pk: str | None = None) -> dict:
+        """Thin wrapper over DesignTemplate.subsystem_fingerprint() -- see
+        that method's docstring in hdb/models.py for the full shape and
+        rationale. Raises DesignTemplate.DoesNotExist if name/pk doesn't
+        match anything (same as get_template()); returns
+        {"complete": False} (nothing else) if the template exists but
+        isn't complete yet, or {"complete": True, **the model method's
+        dict} otherwise -- "complete" is the one key both shapes always
+        have, so callers can branch on it without a None check."""
+        template = self.get_template(name=name, pk=pk)
+        result = template.subsystem_fingerprint()
+        if result is None:
+            return {"complete": False}
+        return {"complete": True, **result}
+
     def template_elements(self, template_name: str):
         return _m().DesignTemplateElement.objects.filter(
             template__name=template_name
@@ -181,6 +262,9 @@ class DesignClient:
         owner_username: str | None = None,
         product_component=None,
         elements=(),
+        source_path: str | None = None,
+        source_sha256: str | None = None,
+        source_git_commit: str | None = None,
     ) -> dict:
         """
         Idempotent create of a DesignTemplate and its DesignTemplateElements
@@ -238,6 +322,12 @@ class DesignClient:
         method and of load_templates_from_yaml() below). Use
         DesignTemplate.is_complete()/pending_placeholders() to check
         what, if anything, is still outstanding.
+
+        `source_path`/`source_sha256`/`source_git_commit`: internal --
+        set by load_templates_from_yaml() to stamp provenance on the
+        template (see DesignTemplate.source_path et al. in hdb/models.py).
+        Leave unset when calling this directly with in-memory data; there
+        is no file behind it to record.
         """
         m = _m()
 
@@ -255,16 +345,39 @@ class DesignClient:
         if product_component is not None:
             product, _ = self._resolve_component(product_component, default_project=project)
 
+        defaults = {
+            "project": project,
+            "description": description,
+            "owner_group": owner_group,
+            "owner_user": owner_user,
+            "product_component": product,
+        }
+        if source_path is not None:
+            defaults["source_path"] = source_path
+            defaults["source_sha256"] = source_sha256 or ""
+            defaults["source_git_commit"] = source_git_commit or ""
+        if self.user is not None:
+            defaults["created_by"] = self.user
+
         template, template_created = m.DesignTemplate.objects.get_or_create(
             name=name,
-            defaults={
-                "project": project,
-                "description": description,
-                "owner_group": owner_group,
-                "owner_user": owner_user,
-                "product_component": product,
-            },
+            defaults=defaults,
         )
+
+        # get_or_create()'s defaults= only apply when the row is first
+        # created -- re-stamp explicitly on every call, including a no-op
+        # reload of an already-existing template, so source_* and
+        # modified_by/modified_on always describe the most recent load
+        # this template was involved in, not just whichever load happened
+        # to create the row in the first place.
+        if source_path is not None or self.user is not None:
+            if source_path is not None:
+                template.source_path = source_path
+                template.source_sha256 = source_sha256 or ""
+                template.source_git_commit = source_git_commit or ""
+            if self.user is not None:
+                template.modified_by = self.user
+            template.save()
 
         element_results = []
         for el in elements:
@@ -386,6 +499,16 @@ class DesignClient:
         nested where it's referenced (cycle, or project/owner_group
         mismatch) -- that needs a human to look at it; it will not
         resolve itself no matter what else is uploaded.
+
+        Every template this call touches also gets its source_path/
+        source_sha256/source_git_commit stamped (see DesignTemplate in
+        hdb/models.py) -- automatically, no extra step -- recording
+        exactly which file, which exact bytes, and (best-effort) which
+        git commit this load came from. Re-running this on an unchanged
+        file still re-stamps them, so they always reflect the most recent
+        load, not just template creation. Use `hdb verify-template` /
+        verify_templates_from_yaml() to check a tracked file's current
+        content against what's actually live.
         """
         import yaml
         from django.db import transaction
@@ -394,6 +517,14 @@ class DesignClient:
             data = yaml.safe_load(fh)
 
         docs = data["templates"] if isinstance(data, dict) and "templates" in data else [data]
+
+        # Provenance: one file content hash / git commit shared by every
+        # template this file defines (a file can hold several "templates:"
+        # documents) -- computed once up front, not per document. See the
+        # helpers above and DesignTemplate.source_path et al.
+        file_source_path = _git_relative_path(path)
+        file_sha256 = _file_sha256(path)
+        file_git_commit = _git_commit_for(path)
 
         results = []
         with transaction.atomic():
@@ -407,9 +538,170 @@ class DesignClient:
                     owner_username=tpl.get("owner_user"),
                     product_component=tpl.get("product_component"),
                     elements=doc.get("elements", []),
+                    source_path=file_source_path,
+                    source_sha256=file_sha256,
+                    source_git_commit=file_git_commit,
                 ))
         resolution = results[-1]["resolution"] if results else {"resolved": [], "conflicts": []}
         return {"templates": results, "resolution": resolution}
+
+    def verify_templates_from_yaml(self, path) -> dict:
+        """
+        Read-only drift check: parse a YAML file exactly as
+        load_templates_from_yaml() would, but never write anything --
+        instead, for every template the file defines, compare the file's
+        current content against what's actually live in the database and
+        report any mismatch.
+
+        This is the enforcement half of source_path/source_sha256 (see
+        DesignTemplate in hdb/models.py): removing the web UI's per-row
+        quantity/delete controls closed one way the database could drift
+        from the tracked YAML, but Django admin and the ORM/shell can
+        still write to a template directly (deliberately -- see
+        client/README.md's note on removing a single placeholder). This
+        can't prevent that; it can tell you it happened, and exactly
+        which field disagrees.
+
+        Returns:
+            {
+              "path": path,
+              "file_sha256": <current hash of the file on disk right now>,
+              "templates": [
+                {
+                  "name": str,
+                  "in_db": bool,                 # False: not loaded at all yet
+                  "source_sha256_recorded": str,  # "" if never loaded from a file
+                  "file_changed_since_load": bool | None,  # None if in_db is False
+                                                            # or never loaded from a file
+                  "field_diffs": {field: {"yaml": ..., "db": ...}, ...},
+                  "elements": [
+                    {
+                      "element_name": str,
+                      "in_db": bool,              # False: this placeholder isn't
+                                                   # loaded (or was removed some
+                                                   # other way -- see client/README.md)
+                      "field_diffs": {field: {"yaml": ..., "db": ...}, ...},
+                    }, ...
+                  ],
+                  "db_only_elements": [str, ...],  # live placeholders this file
+                                                    # doesn't mention at all
+                }, ...
+              ],
+              "has_drift": bool,  # True if ANY field_diffs or db_only_elements
+                                  # exist anywhere above -- file_changed_since_load
+                                  # is informational only and doesn't set this,
+                                  # since "haven't re-loaded yet" isn't drift by
+                                  # itself, just a reason to run load-template.
+            }
+        """
+        import yaml
+
+        m = _m()
+
+        with open(path) as fh:
+            data = yaml.safe_load(fh)
+        docs = data["templates"] if isinstance(data, dict) and "templates" in data else [data]
+
+        file_sha256 = _file_sha256(path)
+
+        def _spec_name(spec):
+            """The name a component/product_component spec declares,
+            without resolving or creating anything (spec is a plain
+            string, or a dict with at least "name") -- see
+            _resolve_component(), which this deliberately does NOT call:
+            verify must never write."""
+            return spec if isinstance(spec, str) else spec.get("name")
+
+        template_reports = []
+        has_drift = False
+
+        for doc in docs:
+            tpl = doc["template"]
+            name = tpl["name"]
+            template = m.DesignTemplate.objects.filter(name=name).select_related(
+                "owner_group", "owner_user", "product_component",
+            ).prefetch_related("elements__component", "elements__child_template").first()
+
+            report = {
+                "name": name,
+                "in_db": template is not None,
+                "source_sha256_recorded": "",
+                "file_changed_since_load": None,
+                "field_diffs": {},
+                "elements": [],
+                "db_only_elements": [],
+            }
+
+            if template is None:
+                template_reports.append(report)
+                continue
+
+            report["source_sha256_recorded"] = template.source_sha256
+            if template.source_sha256:
+                report["file_changed_since_load"] = (template.source_sha256 != file_sha256)
+
+            expected = {
+                "project": tpl.get("project", "ePIC"),
+                "description": tpl.get("description", ""),
+                "owner_group": tpl.get("owner_group"),
+                "owner_user": tpl.get("owner_user"),
+                "product_component": (
+                    _spec_name(tpl["product_component"]) if tpl.get("product_component") else None
+                ),
+            }
+            actual = {
+                "project": template.project,
+                "description": template.description,
+                "owner_group": template.owner_group.name if template.owner_group else None,
+                "owner_user": template.owner_user.username if template.owner_user else None,
+                "product_component": template.product_component.name if template.product_component else None,
+            }
+            for field, yaml_val in expected.items():
+                if yaml_val != actual[field]:
+                    report["field_diffs"][field] = {"yaml": yaml_val, "db": actual[field]}
+            if report["field_diffs"]:
+                has_drift = True
+
+            elements_by_name = {el.element_name: el for el in template.elements.all()}
+            seen_names = set()
+
+            for el in doc.get("elements", []):
+                el_name = el["element_name"]
+                seen_names.add(el_name)
+                db_el = elements_by_name.get(el_name)
+                el_report = {"element_name": el_name, "in_db": db_el is not None, "field_diffs": {}}
+
+                if db_el is not None:
+                    expected_el = {
+                        "quantity": el.get("quantity", 1),
+                        "description": el.get("description", ""),
+                    }
+                    actual_el = {
+                        "quantity": db_el.quantity,
+                        "description": db_el.description,
+                    }
+                    if "child_template" in el and el["child_template"] is not None:
+                        expected_el["child_template_name"] = el["child_template"]
+                        actual_el["child_template_name"] = db_el.child_template_name
+                    else:
+                        expected_el["component_name"] = _spec_name(el.get("component"))
+                        actual_el["component_name"] = db_el.component.name if db_el.component else None
+
+                    for field, yaml_val in expected_el.items():
+                        if yaml_val != actual_el[field]:
+                            el_report["field_diffs"][field] = {"yaml": yaml_val, "db": actual_el[field]}
+                    if el_report["field_diffs"]:
+                        has_drift = True
+
+                report["elements"].append(el_report)
+
+            report["db_only_elements"] = sorted(set(elements_by_name) - seen_names)
+            if report["db_only_elements"]:
+                has_drift = True
+
+            template_reports.append(report)
+
+        return {"path": str(path), "file_sha256": file_sha256, "templates": template_reports, "has_drift": has_drift}
 
     def delete_template(self, name: str | None = None, pk: str | None = None) -> dict:
         """

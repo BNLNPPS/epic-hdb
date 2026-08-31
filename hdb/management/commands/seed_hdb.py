@@ -13,10 +13,14 @@ fields and models that actually exist there. In particular:
 
 Idempotent: safe to run multiple times, never duplicates or clobbers
 existing records (uses get_or_create() throughout; passwords are only
-set the first time an account is created).
+set the first time an account is created). DesignTemplates are the one
+exception to "built up here": they're loaded from the tracked YAML files
+under data/ via hdb_client, same as running `hdb load-template` by hand
+-- see the import section below.
 """
 import os
 import random
+import sys
 from datetime import datetime, time as dt_time
 
 from django.conf import settings
@@ -27,8 +31,23 @@ from django.utils import timezone
 from hdb.models import (
     Institution, Location, TechnicalSystem, Component, ComponentInstance,
     UserProfile, PropertyType, PropertyValue, Design, DesignElement,
-    DesignTemplate, DesignTemplateElement, LogEntry,
+    DesignTemplate, LogEntry,
 )
+
+# DesignTemplates are seeded from the tracked YAML files under data/,
+# below ("DesignTemplate(s): loaded from..."), not built up here
+# field-by-field -- see data/README.md and client/README.md's "Design
+# Templates -- loading from YAML" / "Provenance and drift detection" for
+# why: a template built directly via the ORM has no source_path/
+# source_sha256 behind it, so it can never be checked for drift against
+# a tracked file the way one loaded through hdb_client can. That needs
+# hdb_client (client/), which isn't on sys.path by default for a
+# management command the way it is for `PYTHONPATH=client python
+# manage.py shell` -- add it explicitly, once, here.
+_CLIENT_DIR = str(settings.BASE_DIR / "client")
+if _CLIENT_DIR not in sys.path:
+    sys.path.insert(0, _CLIENT_DIR)
+from hdb_client import HDBClient  # noqa: E402  (must follow the sys.path insert above)
 
 
 class Command(BaseCommand):
@@ -323,29 +342,37 @@ class Command(BaseCommand):
                 defaults={"value": "0.44", "units": "kg"},
             )
 
-        # DesignTemplate: "BEMC tower" -- reusable blueprint. Its elements
-        # reference catalog Components as placeholders; instantiating it from
-        # the Designs page creates a real Design whose placeholders can then
-        # be replaced with actual inventory instances.
-        tower_tpl, tower_tpl_created = DesignTemplate.objects.get_or_create(
-            name="BEMC tower",
-            defaults={"project": "ePIC", "owner_group": grp["BEMC"], "owner_user": crafts,
-                      "description": "One BEMC tower: a PbWO4 crystal read out by four SiPMs."},
-        )
-        if not tower_tpl_created and tower_tpl.owner_group_id != grp["BEMC"].id:
-            tower_tpl.owner_group = grp["BEMC"]
-            tower_tpl.save()
-        if not tower_tpl_created and tower_tpl.owner_user_id != crafts.id:
-            tower_tpl.owner_user = crafts
-            tower_tpl.save()
-        DesignTemplateElement.objects.get_or_create(
-            template=tower_tpl, element_name="Crystal",
-            defaults={"component": crystal, "quantity": 1},
-        )
-        DesignTemplateElement.objects.get_or_create(
-            template=tower_tpl, element_name="SiPM",
-            defaults={"component": pm, "quantity": 4},
-        )
+        # DesignTemplate(s): loaded from the tracked YAML files under data/,
+        # not built up here field-by-field -- see the sys.path/import note
+        # above. Every template this creates or touches gets real
+        # source_path/source_sha256/source_git_commit provenance (see
+        # DesignTemplate in hdb/models.py), the same as running
+        # `hdb load-template` by hand would -- this is that same code
+        # path, just invoked from the seed script instead of the CLI.
+        # `crafts` as the acting user matches client/README.md's own
+        # documented example (`hdb --user crafts load-template ...`).
+        #
+        # Idempotent the same way the rest of this command is: re-running
+        # `seed_hdb` re-loads each file, which never duplicates or
+        # clobbers an existing template's structure (get_or_create
+        # throughout the loader too) -- it just re-stamps provenance to
+        # reflect this load, same as any other `load-template` run.
+        design_client = HDBClient(user=crafts).designs
+        for yaml_name in [
+            "bemc_tower_template.yaml",
+            # BTOF hierarchy -- split one-template-per-file, see
+            # data/btof_split/README.md; order doesn't matter (uploads
+            # are asynchronous/order-independent), listed leaf-first here
+            # only because that's the traditional reading order.
+            os.path.join("btof_split", "btof_stavelet.yaml"),
+            os.path.join("btof_split", "btof_half_stave.yaml"),
+            os.path.join("btof_split", "btof_stave.yaml"),
+        ]:
+            design_client.load_templates_from_yaml(
+                str(settings.BASE_DIR / "data" / yaml_name)
+            )
+
+        tower_tpl = DesignTemplate.objects.get(name="BEMC tower")
 
         # Design: "BEMC tower" -- a placeholder assembly referencing catalog
         # items (not specific inventory instances) for one crystal and its

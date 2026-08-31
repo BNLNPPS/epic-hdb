@@ -109,18 +109,18 @@ dialog.modal::backdrop { background: rgba(20,23,34,.45); }
                 {% for _ in row.indent %}<span class="bom-indent" style="margin-right:2px"></span>{% endfor %}
                 <strong>{{ row.element.element_name }}</strong>
                 {% if row.element.component %}
-                  — <a href="{% url 'component-detail' row.element.component.pk %}" style="color:var(--accent)">{{ row.element.component.name }}</a>
+                  — <span class="micro-label">Component</span> <a href="{% url 'component-detail' row.element.component.pk %}" style="color:var(--accent)">{{ row.element.component.name }}</a>
                   {% if row.element.component.model_number %}
-                    <span class="mono-code" style="margin-left:4px">{{ row.element.component.model_number }}</span>
+                    <span class="micro-label" style="margin-left:6px">Model</span> <span class="mono-code" style="margin-left:2px">{{ row.element.component.model_number }}</span>
                   {% endif %}
                 {% elif row.element.child_design %}
-                  — <a href="{% url 'design-detail' row.element.child_design.pk %}" style="color:var(--accent)">{{ row.element.child_design.name }}</a>
+                  — <span class="micro-label">Child Design</span> <a href="{% url 'design-detail' row.element.child_design.pk %}" style="color:var(--accent)">{{ row.element.child_design.name }}</a>
                 {% endif %}
               </td>
               <td>
                 {% for dei in row.installed %}
                 <div style="display:flex;align-items:center;gap:4px;margin-bottom:4px">
-                  <a href="{% url 'inventory-detail' dei.instance.pk %}" class="mono-code" style="background:#dcfce7;color:#166534;text-decoration:none">{% firstof dei.instance.tag dei.instance.serial_number dei.instance.pk %}</a>
+                  <a href="{% url 'inventory-detail' dei.instance.pk %}" class="mono-code" style="background:#dcfce7;color:#166534;text-decoration:none">{% if dei.instance.tag %}<span class="micro-label" style="color:#166534;opacity:.75">Tag</span> {{ dei.instance.tag }}{% elif dei.instance.serial_number %}<span class="micro-label" style="color:#166534;opacity:.75">Serial</span> {{ dei.instance.serial_number }}{% else %}<span class="micro-label" style="color:#166534;opacity:.75">ID</span> {{ dei.instance.pk }}{% endif %}</a>
                   {% if row.editable %}
                   <form method="post" action="{% url 'design-element-unassign-instance' design.pk row.element.pk %}" style="margin:0">
                     {% csrf_token %}
@@ -130,6 +130,11 @@ dialog.modal::backdrop { background: rgba(20,23,34,.45); }
                   {% endif %}
                 </div>
                 {% endfor %}
+                {% if row.element.component_id and row.slots_left > 0 %}
+                <div style="font-size:11px;color:var(--muted){% if row.installed %};margin-top:2px{% endif %}">
+                  {% if row.installed %}{{ row.slots_left }} more slot{{ row.slots_left|pluralize }} open{% else %}Not installed yet — 0/{{ row.element.quantity }}{% endif %}
+                </div>
+                {% endif %}
                 {% if row.editable and row.slots_left > 0 %}
                 {% if row.available_instances %}
                 <form method="post" action="{% url 'design-element-assign-instance' design.pk row.element.pk %}" style="display:flex;gap:5px;align-items:center;margin:0">
@@ -137,7 +142,7 @@ dialog.modal::backdrop { background: rgba(20,23,34,.45); }
                   <select name="instance" style="max-width:170px;padding:4px 7px;border:1px solid var(--border);border-radius:6px;font-size:12px;color:var(--text);background:var(--surface)">
                     <option value="">— pick from inventory —</option>
                     {% for inst in row.available_instances %}
-                    <option value="{{ inst.pk }}">{% firstof inst.tag inst.serial_number inst.pk %}{% if inst.location %} @ {% if inst.location.institution %}{{ inst.location.institution }} / {% endif %}{{ inst.location.name }}{% endif %}</option>
+                    <option value="{{ inst.pk }}">{% if inst.tag %}Tag: {{ inst.tag }}{% elif inst.serial_number %}Serial: {{ inst.serial_number }}{% else %}ID: {{ inst.pk }}{% endif %}{% if inst.location %} @ {% if inst.location.institution %}{{ inst.location.institution }} / {% endif %}{{ inst.location.name }}{% endif %}</option>
                     {% endfor %}
                   </select>
                   <button type="submit" title="Install into next free slot" style="background:none;border:1px solid var(--border);border-radius:6px;color:var(--accent);cursor:pointer;font-size:11.5px;padding:4px 8px;font-weight:600">Add</button>

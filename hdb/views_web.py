@@ -1701,16 +1701,26 @@ def template_detail(request, pk):
     # down the hierarchy, in a nested sub-template's own placeholders.
     is_complete = template.is_complete()
 
+    # Subsystem fingerprint: a composite hash over this template and
+    # everything beneath it, from each one's own source_sha256 -- see
+    # DesignTemplate.subsystem_fingerprint()'s docstring for the full
+    # rationale and client/README.md's "Provenance and drift detection".
+    # None (and nothing shown below) while incomplete -- same reasoning
+    # as pending_placeholders() above, there's nothing meaningful to
+    # fingerprint yet.
+    subsystem_fingerprint = template.subsystem_fingerprint() if is_complete else None
+
     context = {
-        'template':             template,
-        'can_delete':           can_delete,
-        'is_locked':            is_locked,
-        'is_referenced':        is_referenced,
-        'breadcrumb_ancestors': breadcrumb_ancestors,
-        'is_complete':          is_complete,
-        'pending_placeholders': template.pending_placeholders() if not is_complete else [],
-        'designs_from':         template.designs.select_related('owner_user').order_by('name'),
-        'active_page':          'design-templates',
+        'template':               template,
+        'can_delete':             can_delete,
+        'is_locked':              is_locked,
+        'is_referenced':          is_referenced,
+        'breadcrumb_ancestors':   breadcrumb_ancestors,
+        'is_complete':            is_complete,
+        'pending_placeholders':   template.pending_placeholders() if not is_complete else [],
+        'subsystem_fingerprint':  subsystem_fingerprint,
+        'designs_from':           template.designs.select_related('owner_user').order_by('name'),
+        'active_page':            'design-templates',
     }
     return render(request, 'cdb/template_detail.html', context)
 

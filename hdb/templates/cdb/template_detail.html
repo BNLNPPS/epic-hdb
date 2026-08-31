@@ -215,6 +215,20 @@
         <div class="field-label" title="Depth of nested sub-templates beneath this one (1 = no nesting, every placeholder is a leaf component)">Nesting Levels</div>
         <div class="field-value">{{ template.nesting_levels }}</div>
       </div>
+      {% if subsystem_fingerprint %}
+      <div class="field-group">
+        <div class="field-label" title="Composite hash over this template and everything beneath it, derived from each template's own source_sha256 -- see client/README.md's Provenance and drift detection section. Recomputed fresh on every page load.">Subsystem Fingerprint</div>
+        <div class="field-value">
+          <span class="mono-code" style="word-break:break-all;display:inline-block" title="{{ subsystem_fingerprint.fingerprint }}">{{ subsystem_fingerprint.fingerprint }}</span>
+          <div style="font-size:11px;color:var(--muted);margin-top:4px">
+            {{ subsystem_fingerprint.templates|length }} template{{ subsystem_fingerprint.templates|length|pluralize }} in this subtree
+            {% if subsystem_fingerprint.missing_provenance %}
+            &middot; {{ subsystem_fingerprint.missing_provenance|length }} never loaded from a YAML file (see <span class="mono-code">hdb subsystem-hash</span>)
+            {% endif %}
+          </div>
+        </div>
+      </div>
+      {% endif %}
       {% if template.product_component %}
       <div class="field-group">
         <div class="field-label" title="Catalog Component for one physically completed instance of this assembly">Product Component</div>

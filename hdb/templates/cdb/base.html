@@ -202,6 +202,18 @@
     padding: 2px 7px; border-radius: 4px; letter-spacing: .5px;
   }
 
+  /* Small inline caption naming the attribute of the value right after
+     it (e.g. "Component", "Model", "Tag", "Serial") -- for spots like the
+     BOM table where several differently-sourced values sit next to each
+     other with nothing else distinguishing them. Deliberately NOT a
+     .tag pill (those mean status/category, e.g. "Pending"/"Component");
+     this is plain small-caps text, closer to .field-label but inline
+     rather than stacked above its value. */
+  .micro-label {
+    font-size: 10px; font-weight: 600; color: var(--muted);
+    text-transform: uppercase; letter-spacing: .4px;
+  }
+
   /* PAGINATION */
   .pagination {
     display: flex; align-items: center;

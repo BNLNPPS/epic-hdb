@@ -1,3 +1,20 @@
+# =============================================================================
+# DEPRECATED -- superseded by data/btof_split/*.yaml (btof_stavelet.yaml,
+# btof_half_stave.yaml, btof_stave.yaml). Do not use this file to load or
+# re-load the BTOF templates.
+#
+# This monolithic file was the original source for the "BTOF Stave" /
+# "BTOF Half-Stave" / "BTOF Stavelet" templates. It has been split into
+# one file per template (see data/btof_split/README.md for why and how),
+# and the split files are now the canonical, actively-maintained source --
+# they're what's actually been (re-)loaded into the live database. This
+# file is kept only for its citations and hierarchy write-up below, which
+# the split files' headers point back to; it is not re-run and will drift
+# from the live templates if the split files are ever edited without a
+# matching update here. Prefer data/btof_split/ for anything that reads
+# or edits the current template definitions.
+# =============================================================================
+
 # ---------------------------------------------------------------------------
 # ePIC Barrel Time-of-Flight (BTOF) — Stave / Half-Stave / Stavelet
 # design template hierarchy, for `hdb load-template`.

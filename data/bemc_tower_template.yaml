@@ -1,0 +1,36 @@
+# ---------------------------------------------------------------------------
+# ePIC Backward ElectroMagnetic Calorimeter (BEMC) -- "BEMC tower" design
+# template, for `hdb load-template`.
+#
+# One BEMC tower: a single PbWO4 (lead tungstate) scintillating crystal,
+# read out by four Hamamatsu S14160-3010PS SiPM photosensors. A flat,
+# single-level template -- no nested sub-templates (see
+# data/btof_split/ for what a multi-level one looks like), just two
+# catalog Component placeholders.
+#
+# Both referenced components below are given as plain strings, not dicts
+# -- see client/README.md's "Design Templates -- loading from YAML" --
+# meaning they're expected to ALREADY exist in the catalog, not
+# auto-created. `python manage.py seed_hdb` creates both ("PbWO4
+# Crystal", "Hamamatsu S14160-3010PS") before loading this file; loading
+# this file standalone against a database that doesn't have them yet
+# will fail with Component.DoesNotExist -- load or seed those first.
+# ---------------------------------------------------------------------------
+
+template:
+  name: "BEMC tower"
+  project: "ePIC"
+  owner_group: BEMC
+  owner_user: crafts
+  description: >
+    One BEMC tower: a PbWO4 crystal read out by four SiPMs.
+elements:
+  - element_name: "Crystal"
+    quantity: 1
+    description: "The lead tungstate scintillating crystal itself."
+    component: "PbWO4 Crystal"
+
+  - element_name: "SiPM"
+    quantity: 4
+    description: "Four photosensors read out this one crystal."
+    component: "Hamamatsu S14160-3010PS"

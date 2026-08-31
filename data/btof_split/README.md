@@ -34,18 +34,17 @@ annotated dropdown option and a direct POST), and that `hdb bom-template
 three are loaded (verified programmatically before delivery -- all three
 orders above reproduce an identical, complete BOM).
 
-**Your real database already has templates named "BTOF Stave", "BTOF
-Half-Stave", and "BTOF Stavelet"** -- the pre-existing ones loaded before
-the `child_template` rewrite, whose placeholders still point at Components
-rather than nested templates (the root cause diagnosed earlier, fix still
-on hold). Since template names are globally unique and every element name
-in these split files matches an element name already present on those
-real rows, uploading these files against your live database as-is will
-find each row already there and leave it untouched (`get_or_create` never
-overwrites) -- so none of the pending/resolution behavior above would
-actually be exercised, silently. To test for real, either point `--root`
-at a scratch database (fresh `db.sqlite3`, migrated but not seeded with
-these three templates), or delete the three existing stale templates
-first so these files have a clean name to create against -- don't do the
-latter against the real database without saying so first, since that's
-the real-data fix that's still explicitly on hold.
+**These are the live, canonical BTOF templates.** The real database's
+"BTOF Stave" / "BTOF Half-Stave" / "BTOF Stavelet" were deleted and
+re-loaded from these exact files (superseding the pre-`child_template`-
+rewrite versions, which pointed placeholders at Components rather than
+nested templates) -- see the top-level `data/README.md` for the current
+status. Since template names are globally unique, re-running
+`load-template` against any of these files finds the matching row already
+there and leaves it untouched (`get_or_create` never overwrites) -- safe
+to re-run any time, e.g. after editing one of these files, but note that
+an edit to an *existing* placeholder's fields (quantity, description) is
+NOT picked up by re-running the load -- `get_or_create`'s `defaults=`
+only apply when a row is first created. To exercise the pending/resolution
+behavior described above from scratch again, point `--root` at a fresh
+scratch database instead of the real one.
