@@ -2208,8 +2208,145 @@ def institution_list(request):
         'locations',
         'users__user',
     ).all()
-    context = {'institutions': institutions, 'active_page': 'institutions'}
+    # Round-trips a failed "+ Add Location" submission back here (see
+    # location_create) -- loc_institution says which institution's modal
+    # to reopen, since this page can have one such modal per institution
+    # card, not just the single global modal every other list page has.
+    context = {
+        'institutions':    institutions,
+        'active_page':     'institutions',
+        'location_types':  Location.LOCATION_TYPES,
+        'loc_error':       request.GET.get('loc_error'),
+        'loc_institution': request.GET.get('loc_institution', ''),
+        'loc_name':        request.GET.get('loc_name', ''),
+        'loc_type':        request.GET.get('loc_type', 'room'),
+        'loc_parent':      request.GET.get('loc_parent', ''),
+        'loc_description': request.GET.get('loc_description', ''),
+    }
     return render(request, 'cdb/institutions.html', context)
+
+
+@login_required
+def location_create(request, pk):
+    """Create a new Location under this Institution, from the "+ Add
+    Location" button in that institution's own panel on the Institutions
+    page, and send the user straight to the new location's (empty)
+    inventory page -- confirms it exists and is ready to receive items,
+    same "go straight to what you just created" convention as
+    component_instance_create.
+
+    Institution and Location carry no owner_group of their own to check
+    membership against -- unlike Component/ComponentInstance/Design, this
+    is shared site infrastructure, not one group's own data -- so, same
+    stricter policy as template_delete, creation is superuser-only rather
+    than the usual OwnedModel group-membership-or-superuser rule. The
+    button is hidden from everyone else; this is the authoritative
+    server-side check, not just a hidden control.
+
+    parent is optional and, when given, is required to already be a
+    Location of THIS SAME institution -- the model itself doesn't enforce
+    that (Location.parent has no such constraint, and full_path() would
+    happily walk into a different institution's tree without complaint),
+    but the building/room/cabinet/shelf hierarchy this app expects only
+    makes sense within one institution, so this form doesn't offer a way
+    to create the mismatch even though the schema technically allows it. A
+    parent_id that doesn't resolve under this institution (blank, foreign,
+    or tampered) is silently treated as "no parent" rather than rejected --
+    a business-rule guard, not an authorization one."""
+    institution = get_object_or_404(Institution, pk=pk)
+    can_create = request.user.is_superuser
+
+    if request.method == 'POST':
+        if not can_create:
+            return HttpResponseForbidden("You don't have permission to add a location.")
+        name          = request.POST.get('name', '').strip()
+        location_type = request.POST.get('location_type') or 'room'
+        parent_id     = request.POST.get('parent') or None
+        description   = request.POST.get('description', '').strip()
+        parent = (
+            Location.objects.filter(pk=parent_id, institution_id=institution.pk).first()
+            if parent_id else None
+        )
+
+        if not name:
+            params = urlencode({
+                'loc_error':       'Name is required.',
+                'loc_institution': institution.pk,
+                'loc_name':        name,
+                'loc_type':        location_type,
+                'loc_parent':      parent_id or '',
+                'loc_description': description,
+            })
+            return redirect(f"{reverse('institution-list')}?{params}")
+
+        location = Location.objects.create(
+            name=name,
+            location_type=location_type,
+            institution=institution,
+            parent=parent,
+            description=description,
+        )
+        return redirect('location-inventory', pk=location.pk)
+
+    return redirect('institution-list')
+
+
+@login_required
+def location_update_parent(request, pk):
+    """Set (or clear) a Room location's parent Building.
+
+    This exists for legacy Room locations that predate location_create --
+    the only way to set a parent used to be a direct DB edit, so every
+    Location created before this feature existed has parent = NULL even
+    where a real building association is known. This is a narrow repair
+    tool for that gap, not a general "reparent any location" feature:
+    reparenting an arbitrary location (e.g. a building under another
+    building, or a room under another room) would need cycle-prevention
+    logic this doesn't have, and nothing has asked for that.
+
+    Deliberately scoped to two hard constraints, both enforced here
+    server-side (not just hidden in the UI):
+      - only a 'room' location's parent can be changed through this view;
+      - the new parent, if any, must be a 'building' location in the SAME
+        institution as the room.
+
+    Same superuser-only authorization as location_create, for the same
+    reason -- Location has no owner_group to check membership against.
+
+    A blank submission and an unresolvable one are handled differently on
+    purpose. Blank is the explicit "-- no building --" choice, so it does
+    clear an existing parent. A non-blank parent_id that fails to resolve
+    to a real Building in this institution (tampered, foreign-institution,
+    or stale) is treated as a no-op that leaves the existing parent
+    untouched, rather than silently wiping a valid assignment -- the same
+    "don't clear on bad input" discipline used for inventory location
+    edits."""
+    location = get_object_or_404(Location, pk=pk)
+    can_edit = request.user.is_superuser
+
+    if request.method == 'POST':
+        if not can_edit:
+            return HttpResponseForbidden("You don't have permission to edit this location.")
+
+        if location.location_type == 'room':
+            parent_id = request.POST.get('parent') or None
+            if parent_id:
+                new_parent = Location.objects.filter(
+                    pk=parent_id,
+                    institution_id=location.institution_id,
+                    location_type='building',
+                ).first()
+                if new_parent and new_parent != location.parent:
+                    location.parent = new_parent
+                    location.save()
+                # else: unresolved -- no-op, leave the existing parent untouched.
+            elif location.parent is not None:
+                # Blank submission is the explicit "-- no building --" choice,
+                # not an invalid value -- this one really does mean clear it.
+                location.parent = None
+                location.save()
+
+    return redirect('institution-list')
 
 
 @login_required
