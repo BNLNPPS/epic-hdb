@@ -154,7 +154,11 @@ dialog.modal::backdrop { background: rgba(20,23,34,.45); }
           <form method="post" action="{% url 'inventory-update-location' instance.pk %}" style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin:0">
             {% csrf_token %}
             <select name="location" id="loc-location-select" style="padding:6px 8px;border:1px solid var(--border);border-radius:6px;font-size:13px;color:var(--text);background:var(--surface)">
-              <option value="">— None —</option>
+              {% comment %}
+              No blank "unassign" option: a physical item always has a
+              location, per inventory_update_location's docstring -- this
+              control only ever moves an instance to a different real one.
+              {% endcomment %}
               {% for loc in locations %}
               <option value="{{ loc.pk }}" data-institution="{{ loc.institution_id|default:'' }}" {% if instance.location_id == loc.pk %}selected{% endif %}>{{ loc.full_path }}</option>
               {% endfor %}

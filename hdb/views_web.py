@@ -3,6 +3,7 @@ HDB web views — server-rendered Django pages.
 URL config: hdb/urls_web.py
 """
 import io
+import uuid
 from itertools import groupby
 from urllib.parse import urlencode
 
@@ -14,6 +15,8 @@ from django.contrib.auth.models import User, Group
 from django.core.exceptions import ValidationError
 from django.db.models import Q, Count
 from django.core.paginator import Paginator
+from django.utils import timezone
+from django.utils.dateparse import parse_date
 import qrcode
 
 from .models import (
@@ -63,6 +66,87 @@ def _to_pk_int(value):
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+def _filtered_inventory_queryset(params):
+    """Build the ComponentInstance queryset for a set of inventory list
+    filters (q, location, system, group, owner, design), given a plain
+    dict or QueryDict of those keys. Factored out of inventory_list so the
+    batch-update views (inventory_batch_update_location,
+    inventory_batch_update_owner) can recompute exactly "everything
+    inventory_list is currently showing" -- for the "select all N matching
+    current filters" action -- from request.POST (where inventory.html
+    mirrors the active filters as hidden fields under these same names)
+    instead of duplicating this filtering logic and risking it drifting
+    out of sync with the GET-driven list page.
+
+    Deliberately does NOT include the 'design_installations' prefetch
+    inventory_list adds for its own display purposes -- that's a rendering
+    optimization for the "Used In Design" column, irrelevant (and wasted
+    work) for the batch views, which only ever read pk/location/owner_*
+    off the result."""
+    q        = params.get('q', '')
+    location = params.get('location', '')
+    system   = params.get('system', '')
+    group    = params.get('group', '')
+    owner    = params.get('owner', '')
+    design   = params.get('design', '')
+
+    qs = ComponentInstance.objects.select_related(
+        'component', 'component__technical_system',
+        'location', 'location__institution', 'owner_group', 'owner_user',
+    )
+    if q:
+        qs = qs.filter(
+            Q(tag__icontains=q) |
+            Q(serial_number__icontains=q) | Q(component__name__icontains=q)
+        )
+    if location:
+        qs = qs.filter(location_id=location)
+    if system:
+        qs = qs.filter(component__technical_system__name=system)
+    if group:
+        qs = qs.filter(owner_group__name=group)
+    if owner:
+        qs = qs.filter(owner_user__username=owner)
+    # 'unassigned' is a sentinel, not a Design pk -- see inventory_list.
+    if design == 'unassigned':
+        qs = qs.filter(design_installations__isnull=True)
+    elif design:
+        qs = qs.filter(design_installations__element__design_id=design)
+    return qs
+
+
+def _selected_inventory_queryset(request, user_group_ids):
+    """Resolve which ComponentInstances a batch-update POST (from the
+    inventory table's checkbox selection) is targeting, then narrow that
+    to only the instances the requester is actually authorized to touch --
+    same group-membership-or-superuser rule as every single-instance
+    control (inventory_update_location, inventory_transfer_owner), applied
+    here as a queryset filter instead of a single boolean.
+
+    Two selection modes, matching the batch form's two states:
+      - an explicit list of checked pks (POST['instances'], repeated), or
+      - all_filtered=1 -- set when "Select all N matching current filters"
+        was used instead of paging through checkboxes -- plus the filter
+        params mirrored into hidden fields, re-derived via
+        _filtered_inventory_queryset exactly as inventory_list would have
+        rendered them (request.POST is empty of query-string filters on
+        its own; the hidden fields are what carry them through the
+        POST).
+
+    In the explicit-pks mode, an unauthorized pk slipped into the POST
+    (never possible through the rendered UI, which only ever emits a
+    checkbox for a row the viewer can manage -- but this is the
+    authoritative server-side check, not the UI, so it's still enforced
+    here) is simply excluded rather than rejecting the whole batch."""
+    if request.POST.get('all_filtered') == '1':
+        qs = _filtered_inventory_queryset(request.POST)
+    else:
+        qs = ComponentInstance.objects.filter(pk__in=request.POST.getlist('instances'))
+    if not request.user.is_superuser:
+        qs = qs.filter(owner_group_id__in=user_group_ids)
+    return qs
 
 
 def _unique_design_name(base):
@@ -653,31 +737,14 @@ def inventory_list(request):
     sort        = request.GET.get('sort', 'component')
     direction   = request.GET.get('dir', 'asc')
 
-    qs = ComponentInstance.objects.select_related(
-        'component', 'component__technical_system',
-        'location', 'location__institution', 'owner_group', 'owner_user',
-    ).prefetch_related('design_installations__element__design')
-    if q:
-        qs = qs.filter(
-            Q(tag__icontains=q) |
-            Q(serial_number__icontains=q) | Q(component__name__icontains=q)
-        )
-    if location:
-        qs = qs.filter(location_id=location)
-    if system:
-        qs = qs.filter(component__technical_system__name=system)
-    if group:
-        qs = qs.filter(owner_group__name=group)
-    if owner:
-        qs = qs.filter(owner_user__username=owner)
-    # 'unassigned' is a sentinel, not a Design pk -- it selects instances
-    # with no row in the reverse design_installations relation at all
-    # (never installed anywhere), the same relation the "Used In Design"
-    # column reads. Any other non-empty value is a real Design pk.
-    if design == 'unassigned':
-        qs = qs.filter(design_installations__isnull=True)
-    elif design:
-        qs = qs.filter(design_installations__element__design_id=design)
+    # Filtering itself lives in _filtered_inventory_queryset, shared with
+    # the batch-update views' "select all N matching current filters"
+    # action -- see that function's docstring. The design_installations
+    # prefetch here is purely this page's own "Used In Design" column, not
+    # a filtering concern, so it's layered on top rather than folded in.
+    qs = _filtered_inventory_queryset(request.GET).prefetch_related(
+        'design_installations__element__design'
+    )
 
     _sort_map = {
         'tag':       'tag',
@@ -703,8 +770,25 @@ def inventory_list(request):
     paginator = Paginator(qs, per_page)
     page_obj  = paginator.get_page(request.GET.get('page'))
 
+    # How many of the currently-filtered instances the batch actions could
+    # actually touch -- same group-membership-or-superuser rule
+    # _selected_inventory_queryset applies. This, not
+    # page_obj.paginator.count, is what "Select all N matching current
+    # filters" should offer and count: showing the raw filtered total
+    # there would include instances outside the viewer's own groups that
+    # a batch action silently can't reach anyway.
+    editable_total = qs.count() if request.user.is_superuser else qs.filter(
+        owner_group_id__in=user_group_ids
+    ).count()
+
+    def _batch_int(name):
+        try:
+            return int(request.GET.get(name, ''))
+        except (TypeError, ValueError):
+            return None
+
     context = {
-        'page_obj':     page_obj,
+        'page_obj':       page_obj,
         'q':            q,
         'location':     location,
         'system':       system,
@@ -732,11 +816,170 @@ def inventory_list(request):
         'locations':       Location.objects.select_related('institution').order_by('name'),
         'designs':         Design.objects.order_by('name'),
         'show_add_button': True,
+        'user_group_ids':  user_group_ids,
+        'editable_total':  editable_total,
+        'batch_updated':   _batch_int('batch_updated'),
+        'batch_skipped':   _batch_int('batch_skipped'),
         'form_error':      form_error,
         'form_data':       form_data,
         'open_modal':      bool(form_error),
     }
     return render(request, 'cdb/inventory.html', context)
+
+
+def _inventory_batch_redirect(request, **result):
+    """Redirect back to the inventory list, preserving the filters the
+    batch form mirrored into hidden fields (so the viewer lands back on
+    the same filtered view they acted on, not an unfiltered one) plus a
+    batch_updated/batch_skipped summary for inventory_list to render as a
+    small result banner. Deliberately resets to page 1 and default sort --
+    a bulk edit is likely to have changed which rows even match the
+    current sort/location filter, so re-showing whatever page N happened
+    to be current is more likely to confuse than help."""
+    params = {
+        k: request.POST.get(k, '')
+        for k in ('q', 'location', 'system', 'group', 'owner', 'design')
+        if request.POST.get(k)
+    }
+    params.update({k: v for k, v in result.items() if v})
+    return redirect(f"{reverse('inventory-list')}?{urlencode(params)}" if params
+                     else reverse('inventory-list'))
+
+
+@login_required
+def inventory_batch_update_location(request):
+    """Batch-move a set of ComponentInstances to a new Location, from the
+    checkbox selection (or "Select all N matching current filters") in the
+    inventory table's batch action bar. Same group-membership-or-superuser
+    authorization as the single-item inventory_update_location, applied
+    via _selected_inventory_queryset as a queryset filter instead of a
+    single boolean -- a selection that (for a superuser browsing across
+    groups) spans instances outside the requester's own groups only ever
+    has its authorized subset touched; nothing in the rendered UI can
+    produce that for a non-superuser, since it never emits a checkbox for
+    a row outside their own groups in the first place.
+
+    Old locations are read before the write so each changed instance still
+    gets its own LogEntry ("moved from X to Y"), same as the single-item
+    control -- then the actual field write is one UPDATE statement over
+    the changed pks rather than N individual .save() calls, since at
+    inventory-list scale a batch is exactly the case .save()-per-row was
+    never sized for. LogEntry.id has no field-level default (see its
+    save() override) -- bulk_create bypasses save(), so the id has to be
+    set explicitly on each row here or every one would insert with a
+    blank primary key.
+
+    A physical item always has a location (see inventory_update_location),
+    so -- same as that single-item control -- this only ever MOVES the
+    selection to a different real Location, never clears it. A blank or
+    unresolvable target_location is a no-op for the whole batch rather
+    than "clear everyone's location," which is what treating a missing
+    new_location as "the target is None" would otherwise do."""
+    if request.method != 'POST':
+        return redirect('inventory-list')
+
+    user_group_ids = set(request.user.groups.values_list('id', flat=True))
+    qs = _selected_inventory_queryset(request, user_group_ids)
+
+    location_id  = request.POST.get('target_location') or None
+    new_location = Location.objects.filter(pk=location_id).first() if location_id else None
+
+    changed = []
+    if new_location:
+        changed = [
+            inst for inst in qs.select_related('location')
+            if inst.location_id != new_location.pk
+        ]
+    if changed:
+        LogEntry.objects.bulk_create([
+            LogEntry(
+                id=str(uuid.uuid4()),
+                component_instance=inst,
+                topic='inventory',
+                logged_by=request.user,
+                entry=(
+                    f"{inst.tag or inst.pk} moved from "
+                    f"{inst.location or 'unassigned'} to {new_location} by "
+                    f"{request.user.get_full_name() or request.user.username} (batch update)."
+                ),
+            )
+            for inst in changed
+        ])
+        ComponentInstance.objects.filter(
+            pk__in=[inst.pk for inst in changed]
+        ).update(location_id=new_location.pk)
+
+    return _inventory_batch_redirect(request, batch_updated=len(changed))
+
+
+@login_required
+def inventory_batch_update_owner(request):
+    """Batch-reassign a set of ComponentInstances' owner_user, from the
+    same batch action bar as inventory_batch_update_location. Deliberately
+    narrower than that sibling action: owner_group affiliation itself is
+    never touched here (out of scope by design, same as the single-item
+    inventory_transfer_owner) -- only owner_user moves, and only to a
+    target who is a valid owner for the instance being changed: a member
+    of THAT instance's own owner_group, or any superuser.
+
+    A selection authorized by _selected_inventory_queryset can still span
+    several different owner_groups (possible for a superuser; not
+    reachable for a regular user, whose own filtered view can't surface
+    instances outside their groups to begin with), and the one target
+    chosen in the batch bar may not be a valid owner for every group
+    represented. inventory_transfer_owner treats that as "a business-rule
+    violation from an otherwise authorized request, not an authorization
+    breach" for a single instance, and silently no-ops; here, with many
+    instances in play at once, each such case is instead excluded from
+    the write and counted as batch_skipped so the result banner can say
+    so, rather than going silently missing from what looked like a clean
+    batch update."""
+    if request.method != 'POST':
+        return redirect('inventory-list')
+
+    user_group_ids = set(request.user.groups.values_list('id', flat=True))
+    qs = _selected_inventory_queryset(request, user_group_ids)
+
+    new_owner_id = _to_pk_int(request.POST.get('target_owner'))
+    new_owner    = User.objects.filter(pk=new_owner_id).first() if new_owner_id else None
+
+    changed = []
+    skipped = 0
+    if new_owner:
+        # Groups new_owner is a valid target for, computed once rather
+        # than re-querying per instance -- a superuser is a valid target
+        # for every group without needing to actually belong to any of
+        # them, same exception as inventory_transfer_owner's
+        # valid_target_q.
+        new_owner_group_ids = set(new_owner.groups.values_list('id', flat=True))
+        for inst in qs.select_related('owner_user', 'owner_group'):
+            valid = new_owner.is_superuser or inst.owner_group_id in new_owner_group_ids
+            if not valid:
+                skipped += 1
+            elif inst.owner_user_id != new_owner.pk:
+                changed.append(inst)
+
+    if changed:
+        LogEntry.objects.bulk_create([
+            LogEntry(
+                id=str(uuid.uuid4()),
+                component_instance=inst,
+                topic='inventory',
+                logged_by=request.user,
+                entry=(
+                    f"Ownership of {inst.tag or inst.pk} transferred from "
+                    f"{inst.owner_user.get_full_name() or inst.owner_user.username if inst.owner_user else 'unassigned'} "
+                    f"to {new_owner.get_full_name() or new_owner.username} by "
+                    f"{request.user.get_full_name() or request.user.username} (batch update)."
+                ),
+            )
+            for inst in changed
+        ])
+        ComponentInstance.objects.filter(
+            pk__in=[inst.pk for inst in changed]
+        ).update(owner_user=new_owner)
+
+    return _inventory_batch_redirect(request, batch_updated=len(changed), batch_skipped=skipped)
 
 
 @login_required
@@ -905,7 +1148,16 @@ def inventory_update_location(request, pk):
     the server only needs to persist the submitted location; there's no
     way to end up with an institution/location pair that disagree with
     each other since every option in the list is a real, existing
-    Location row with its own correct institution."""
+    Location row with its own correct institution.
+
+    A physical item always has a location -- creation already enforces
+    this (component_instance_create, the "Add Inventory Item" form) -- so
+    this control only ever MOVES an instance to a different real Location,
+    never clears it back to none. The dropdown no longer offers a blank
+    "unassign" choice; a location_id that doesn't resolve to a real
+    Location (blank, or a stale/tampered value) is simply ignored rather
+    than treated as "set it to null," the same authoritative-server-side-
+    check pattern used everywhere else in this file."""
     instance = get_object_or_404(ComponentInstance, pk=pk)
     user_group_ids = set(request.user.groups.values_list('id', flat=True))
     can_manage = (
@@ -918,25 +1170,18 @@ def inventory_update_location(request, pk):
             return HttpResponseForbidden("You don't have permission to move this instance.")
         location_id = request.POST.get('location') or None
         old_location = instance.location
-        new_location = None
+        new_location = Location.objects.filter(pk=location_id).first() if location_id else None
 
-        if location_id:
-            new_location = Location.objects.filter(pk=location_id).first()
-            if new_location:
-                instance.location_id = location_id
-                instance.save()
-        else:
-            instance.location_id = None
+        if new_location and new_location != old_location:
+            instance.location_id = new_location.pk
             instance.save()
-
-        if old_location != new_location:
             LogEntry.objects.create(
                 component_instance=instance,
                 topic='inventory',
                 logged_by=request.user,
                 entry=(
                     f"{instance.tag or instance.pk} moved from "
-                    f"{old_location or 'unassigned'} to {new_location or 'unassigned'} by "
+                    f"{old_location or 'unassigned'} to {new_location} by "
                     f"{request.user.get_full_name() or request.user.username}."
                 ),
             )
@@ -2044,8 +2289,11 @@ def location_inventory(request, pk):
 
 @login_required
 def log_list(request):
-    q     = request.GET.get('q', '')
-    topic = request.GET.get('topic', '')
+    q         = request.GET.get('q', '')
+    topic     = request.GET.get('topic', '')
+    group     = request.GET.get('group', '')
+    date_from = request.GET.get('date_from', '')
+    date_to   = request.GET.get('date_to', '')
 
     qs = LogEntry.objects.select_related(
         'logged_by', 'component', 'component_instance', 'design',
@@ -2055,6 +2303,34 @@ def log_list(request):
         qs = qs.filter(entry__icontains=q)
     if topic:
         qs = qs.filter(topic=topic)
+    # parse_date rejects anything that isn't a real YYYY-MM-DD date, so a
+    # malformed or tampered value (the <input type="date"> itself won't
+    # submit one, but this is the authoritative server-side check, same
+    # pattern as every other filter/form in this file) is simply ignored
+    # rather than raising out of the __date__gte/lte lookup. Both bounds
+    # are inclusive -- "from X to Y" reads as covering the whole of Y too,
+    # matching how someone picking two calendar days on this kind of
+    # filter actually expects it to behave.
+    parsed_from = parse_date(date_from) if date_from else None
+    parsed_to   = parse_date(date_to) if date_to else None
+    if parsed_from:
+        qs = qs.filter(timestamp__date__gte=parsed_from)
+    if parsed_to:
+        qs = qs.filter(timestamp__date__lte=parsed_to)
+    if group:
+        # A LogEntry has no owner_group of its own -- it's whichever of its
+        # three optional targets (component / component_instance / design)
+        # is actually set, and all three are OwnedModel subclasses sharing
+        # the same owner_group field, so this is a uniform 3-way OR rather
+        # than three separate filters. An entry whose target has since been
+        # deleted (all three FKs null, e.g. via SET_NULL) matches no group
+        # and simply won't appear under any group filter -- same as it
+        # already not appearing under any of today's other filters.
+        qs = qs.filter(
+            Q(component__owner_group__name=group)
+            | Q(component_instance__owner_group__name=group)
+            | Q(design__owner_group__name=group)
+        )
 
     per_page  = _resolve_page_size(request)
     paginator = Paginator(qs, per_page)
@@ -2064,7 +2340,12 @@ def log_list(request):
         'page_obj':         page_obj,
         'q':                q,
         'topic':            topic,
+        'group':            group,
+        'date_from':        date_from,
+        'date_to':          date_to,
+        'today':            timezone.localdate(),
         'topics':           LogEntry.TOPIC_CHOICES,
+        'groups':           Group.objects.order_by('name'),
         'per_page':         per_page,
         'per_page_choices': PAGE_SIZE_CHOICES,
         'query_str':        _qs(request),

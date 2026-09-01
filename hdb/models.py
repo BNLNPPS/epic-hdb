@@ -338,7 +338,15 @@ class ComponentInstance(OwnedModel):
     serial_number    = models.CharField(max_length=128, blank=True)
     component        = models.ForeignKey(Component,       on_delete=models.PROTECT,  related_name="instances")
     technical_system = models.ForeignKey(TechnicalSystem, null=True, blank=True, on_delete=models.SET_NULL, related_name="component_instances")
-    location         = models.ForeignKey(Location,        null=True, blank=True, on_delete=models.SET_NULL, related_name="instances")
+    # on_delete=PROTECT (not SET_NULL): deleting a Location that still has
+    # instances stored there would otherwise silently blank out their
+    # location for everyone who owns one, with the person deleting the
+    # Location having no obvious reason to think about inventory at all.
+    # null=True/blank=True stay -- that's a separate question (whether a
+    # user should ever be able to explicitly clear an instance's own
+    # location) from what happens to instances when the Location itself
+    # is deleted out from under them.
+    location         = models.ForeignKey(Location,        null=True, blank=True, on_delete=models.PROTECT, related_name="instances")
     description      = models.TextField(blank=True)
 
     def save(self, *args, **kwargs):
@@ -918,8 +926,14 @@ class Design(OwnedModel):
         related_name="designs",
         help_text="Template this design was instantiated from, if any.",
     )
+    # on_delete=PROTECT, same reasoning as ComponentInstance.location:
+    # deleting a Location a Design is currently assembled at shouldn't
+    # silently clear that design's assembly location. null=True/blank=True
+    # stay, unlike ComponentInstance -- an unset Design.location is a
+    # normal, actively-used state (see design_detail's needs_location
+    # banner), not something creation ever required in the first place.
     location    = models.ForeignKey(
-        Location, null=True, blank=True, on_delete=models.SET_NULL,
+        Location, null=True, blank=True, on_delete=models.PROTECT,
         related_name="designs",
         help_text=(
             "Where this design is being assembled. A design lives in exactly "

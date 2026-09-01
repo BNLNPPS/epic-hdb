@@ -8,6 +8,19 @@
 .sort-icon { font-size:10px; opacity:.45; }
 .sort-icon.active { opacity:1; color:var(--accent); }
 
+.batch-bar {
+  display: none; align-items: center; flex-wrap: wrap; gap: 8px 14px;
+  background: var(--surface-alt, #f1f5f9); border: 1px solid var(--border);
+  border-radius: 8px; padding: 9px 12px; margin: 10px 0; font-size: 12.5px;
+}
+.batch-bar select { padding: 5px 7px; border: 1px solid var(--border); border-radius: 6px; font-size: 12.5px; color: var(--text); background: var(--surface); }
+.batch-bar a { color: var(--accent); }
+.batch-actions { display: none; align-items: center; gap: 6px; margin-left: auto; flex-wrap: wrap; }
+.batch-result {
+  background: #dcfce7; color: #166534; border-radius: 8px;
+  padding: 9px 12px; margin: 10px 0; font-size: 12.5px;
+}
+
 dialog.modal {
   border: none; border-radius: 12px; padding: 0;
   box-shadow: 0 10px 40px rgba(30,34,48,.18);
@@ -111,6 +124,13 @@ dialog.modal::backdrop { background: rgba(20,23,34,.45); }
 </script>
 {% endif %}
 
+{% if batch_updated is not None %}
+<div class="batch-result">
+  Updated {{ batch_updated }} item{{ batch_updated|pluralize }}.
+  {% if batch_skipped %} Skipped {{ batch_skipped }} where the chosen owner isn't valid for that item's group.{% endif %}
+</div>
+{% endif %}
+
 <form method="get" class="toolbar">
   <div class="search-wrap">
     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
@@ -151,12 +171,56 @@ dialog.modal::backdrop { background: rgba(20,23,34,.45); }
   {% if q or location or system or group or owner or design %}<a href="{% url 'inventory-list' %}" class="btn btn-ghost">Clear</a>{% endif %}
 </form>
 
+<form method="post" id="batch-form">
+  {% csrf_token %}
+  {% comment %}
+  Mirrors the active filters into the batch POST -- request.POST carries
+  no query string of its own, so this is what lets
+  _selected_inventory_queryset / _filtered_inventory_queryset re-derive
+  "everything this page is currently showing" for the "Select all N
+  matching current filters" action.
+  {% endcomment %}
+  <input type="hidden" name="q" value="{{ q }}">
+  <input type="hidden" name="location" value="{{ location }}">
+  <input type="hidden" name="system" value="{{ system }}">
+  <input type="hidden" name="group" value="{{ group }}">
+  <input type="hidden" name="owner" value="{{ owner }}">
+  <input type="hidden" name="design" value="{{ design }}">
+  <input type="hidden" name="all_filtered" id="all-filtered-flag" value="0">
+
+  <div id="batch-bar" class="batch-bar">
+    <span id="batch-count-label"></span>
+    <span id="batch-select-all-wrap" style="display:none">
+      &middot; <a href="#" id="batch-select-all-filtered">Select all {{ editable_total }} matching current filters</a>
+    </span>
+    <span id="batch-all-selected-label" style="display:none">
+      All {{ editable_total }} matching items selected &middot; <a href="#" id="batch-clear-selection">Clear</a>
+    </span>
+    <span id="batch-actions-wrap" class="batch-actions">
+      <select name="target_location">
+        <option value="">— move to… —</option>
+        {% for loc in locations %}
+        <option value="{{ loc.pk }}">{{ loc.full_path }}</option>
+        {% endfor %}
+      </select>
+      <button type="submit" formaction="{% url 'inventory-batch-location' %}" class="btn btn-ghost">Move to Location</button>
+      <select name="target_owner">
+        <option value="">— choose user —</option>
+        {% for u in users %}
+        <option value="{{ u.pk }}">{{ u.get_full_name|default:u.username }}</option>
+        {% endfor %}
+      </select>
+      <button type="submit" formaction="{% url 'inventory-batch-owner' %}" class="btn btn-ghost">Reassign Owner</button>
+    </span>
+  </div>
+
 {% comment %}Sortable header macro via with blocks{% endcomment %}
 {% with csort=sort cdir=dir cqs=sort_qs %}
 <div class="table-wrap">
   <table>
     <thead>
       <tr>
+        <th style="width:26px"><input type="checkbox" id="select-all-page" title="Select all on this page"></th>
         {% with col="tag" label="Tag" %}
         <th class="th-sort">
           <a href="?{{ cqs }}&sort={{ col }}&dir={% if csort == col and cdir == 'asc' %}desc{% else %}asc{% endif %}">
@@ -223,6 +287,11 @@ dialog.modal::backdrop { background: rgba(20,23,34,.45); }
     <tbody>
       {% for inst in page_obj %}
       <tr class="clickable" onclick="location.href='{% url 'inventory-detail' inst.pk %}'">
+        <td onclick="event.stopPropagation()">
+          {% if user.is_superuser or inst.owner_group_id in user_group_ids %}
+          <input type="checkbox" name="instances" value="{{ inst.pk }}" class="row-check">
+          {% endif %}
+        </td>
         <td>{{ inst.tag|default:"—" }}</td>
         <td>{{ inst.component.name }}</td>
         <td>{% if inst.technical_system %}<span class="tag">{{ inst.technical_system }}</span>{% else %}—{% endif %}</td>
@@ -242,12 +311,80 @@ dialog.modal::backdrop { background: rgba(20,23,34,.45); }
         <td style="font-size:12px;color:var(--muted)">{{ inst.created_on|date:"Y-m-d" }}</td>
       </tr>
       {% empty %}
-      <tr><td colspan="9"><div class="empty">No instances found{% if q %} for "{{ q }}"{% endif %}</div></td></tr>
+      <tr><td colspan="10"><div class="empty">No instances found{% if q %} for "{{ q }}"{% endif %}</div></td></tr>
       {% endfor %}
     </tbody>
   </table>
 </div>
 {% endwith %}
+</form>
+<script>
+  (function () {
+    var form         = document.getElementById('batch-form');
+    var selectAllPage = document.getElementById('select-all-page');
+    var bar           = document.getElementById('batch-bar');
+    var countLabel    = document.getElementById('batch-count-label');
+    var selectAllWrap = document.getElementById('batch-select-all-wrap');
+    var allSelectedLabel = document.getElementById('batch-all-selected-label');
+    var actionsWrap   = document.getElementById('batch-actions-wrap');
+    var allFilteredFlag = document.getElementById('all-filtered-flag');
+    var totalMatching = {{ editable_total }};
+
+    function rowChecks() { return Array.prototype.slice.call(form.querySelectorAll('.row-check')); }
+    var pageEditableCount = rowChecks().length;
+
+    function refresh() {
+      var checked = rowChecks().filter(function (c) { return c.checked; });
+      var n = checked.length;
+      allFilteredFlag.value = '0';
+      allSelectedLabel.style.display = 'none';
+
+      if (n === 0) {
+        bar.style.display = 'none';
+        selectAllPage.checked = false;
+        selectAllPage.indeterminate = false;
+        return;
+      }
+
+      bar.style.display = 'flex';
+      actionsWrap.style.display = 'inline-flex';
+      countLabel.textContent = n + ' selected';
+      selectAllWrap.style.display = (n === pageEditableCount && totalMatching > pageEditableCount) ? 'inline' : 'none';
+      selectAllPage.checked = pageEditableCount > 0 && n === pageEditableCount;
+      selectAllPage.indeterminate = n > 0 && n < pageEditableCount;
+    }
+
+    rowChecks().forEach(function (c) { c.addEventListener('change', refresh); });
+
+    selectAllPage.addEventListener('change', function () {
+      rowChecks().forEach(function (c) { c.checked = selectAllPage.checked; });
+      refresh();
+    });
+
+    var selectAllFilteredLink = document.getElementById('batch-select-all-filtered');
+    if (selectAllFilteredLink) {
+      selectAllFilteredLink.addEventListener('click', function (e) {
+        e.preventDefault();
+        allFilteredFlag.value = '1';
+        countLabel.textContent = totalMatching + ' selected';
+        selectAllWrap.style.display = 'none';
+        allSelectedLabel.style.display = 'inline';
+      });
+    }
+
+    var clearLink = document.getElementById('batch-clear-selection');
+    if (clearLink) {
+      clearLink.addEventListener('click', function (e) {
+        e.preventDefault();
+        rowChecks().forEach(function (c) { c.checked = false; });
+        allFilteredFlag.value = '0';
+        bar.style.display = 'none';
+        selectAllPage.checked = false;
+        selectAllPage.indeterminate = false;
+      });
+    }
+  })();
+</script>
 
 {% if page_obj.paginator.count > 0 %}
 <div class="pagination">

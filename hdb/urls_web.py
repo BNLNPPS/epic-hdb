@@ -23,6 +23,17 @@ urlpatterns = [
     path("components/<str:pk>/transfer-owner/",
                                        views_web.component_transfer_owner, name="component-transfer-owner"),
     path("inventory/",                views_web.inventory_list,   name="inventory-list"),
+    # These two must come before inventory/<str:pk>/ below -- <str:pk> is a
+    # plain string matcher with no format constraint, so it would otherwise
+    # swallow the literal "batch" segment as if it were an instance pk
+    # (exactly what happened before this reordering: POSTs here 404'd out
+    # of inventory_update_location with "No ComponentInstance matches the
+    # given query" for pk="batch", since Django tries urlpatterns in order
+    # and stops at the first match).
+    path("inventory/batch/update-location/",
+                                       views_web.inventory_batch_update_location, name="inventory-batch-location"),
+    path("inventory/batch/update-owner/",
+                                       views_web.inventory_batch_update_owner, name="inventory-batch-owner"),
     path("inventory/<str:pk>/",       views_web.inventory_detail, name="inventory-detail"),
     path("inventory/<str:pk>/properties/<str:property_id>/update/",
                                        views_web.inventory_property_update, name="inventory-property-update"),
