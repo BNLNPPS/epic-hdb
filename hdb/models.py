@@ -67,9 +67,17 @@ class Location(models.Model):
     institution   = models.ForeignKey(
         Institution, on_delete=models.PROTECT, related_name="locations"
     )
+    # null/blank stay True -- parent is still optional (most Locations have
+    # none, e.g. every top-level Building). PROTECT rather than SET_NULL:
+    # deleting a Building that still has Rooms parented to it used to
+    # silently orphan them (parent reset to NULL, no warning) even though
+    # the Rooms' own items were unaffected -- same "don't lose location
+    # history by surprise" reasoning as institution above. A Room (or any
+    # location) with no children of its own is unaffected and still
+    # deletes/reparents freely.
     parent = models.ForeignKey(
         "self", null=True, blank=True,
-        on_delete=models.SET_NULL, related_name="children"
+        on_delete=models.PROTECT, related_name="children"
     )
     description = models.TextField(blank=True)
 
