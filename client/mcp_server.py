@@ -14,8 +14,15 @@ never logged, stored, or echoed back.
 
 Every authenticated request is bound to a Django User for its duration,
 via a contextvar (see AuthContext below). Every tool builds a
-HDBClient(user=...) scoped to that user, so writes are permission-checked
-and the ownership hooks in hdb_client/access.py apply uniformly.
+HDBClient(user=...) scoped to that user -- kept even though every tool
+here is now read-only, so who asked is still known for logging/auditing,
+and so a future read-scoping change to hdb_client/access.py's
+visible_to() would apply here automatically without touching this file.
+
+No tool in this file performs a create/update/delete of any kind. This
+is a deliberate policy, not a gap: a dialogue-driven agent should not be
+able to mutate HDB. See the comment above the ASGI app section for the
+full rationale.
 
 Transport
 ---------
@@ -454,31 +461,14 @@ def hdb_systems_overview() -> list[dict]:
     return scoped_client().systems.instance_counts()
 
 
-@mcp.tool()
-@django_tool
-def hdb_create_instance(
-    component_name: str,
-    tag: str = "",
-    serial_number: str = "",
-    description: str = "",
-    location_name: Optional[str] = None,
-    owner_group_name: Optional[str] = None,
-) -> dict:
-    """
-    Create a new physical inventory instance of an existing catalog
-    Component. The instance is always owned by the authenticated caller;
-    owner_group_name must name a group the caller actually belongs to
-    (write access to that record is then governed by group_writeable,
-    which is set automatically when an owner_group is supplied).
-    """
-    return scoped_client().inventory.create(
-        component_name=component_name,
-        tag=tag,
-        serial_number=serial_number,
-        description=description,
-        location_name=location_name,
-        owner_group_name=owner_group_name,
-    )
+# This server is deliberately read-only: query tools only, no
+# create/update/delete tool of any kind. hdb_client.inventory.create()
+# (and every other write path in the client layer) still exists and is
+# still reachable from the CLI (`hdb.py create-instance`) and the web
+# app -- it is just never wired up to an MCP tool here, by policy: a
+# dialogue-driven agent should not be able to mutate HDB, however
+# well-scoped an individual write might be. Do not re-add a write tool
+# without revisiting that decision explicitly.
 
 
 # ---------------------------------------------------------------------

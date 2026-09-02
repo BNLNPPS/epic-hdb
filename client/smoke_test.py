@@ -14,9 +14,9 @@ Covers two layers:
      (password `crafts`, member of group `BEMC`):
        - session handshake + tool listing
        - each read tool, against real seed records
-       - the write path's permission boundary: crafts can create an
-         instance owned by BEMC (their own group) but is rejected
-         trying to own one by BTOF (a group they don't belong to)
+
+  mcp_server.py exposes read-only tools only (no create/update/delete),
+  so there is no write path to exercise here.
 
 Usage
 -----
@@ -138,8 +138,12 @@ def run_mcp_checks(base_url: str, username: str, password: str) -> None:
                     "hdb_instances_at_institution", "hdb_design_search",
                     "hdb_design_summary", "hdb_design_bom",
                     "hdb_list_institutions", "hdb_location_tree",
-                    "hdb_systems_overview", "hdb_create_instance",
+                    "hdb_systems_overview",
                 }
+                check("no write tool is registered",
+                      "hdb_create_instance" not in names and
+                      not any(n.startswith(("hdb_create", "hdb_update", "hdb_delete")) for n in names),
+                      f"got tool names: {sorted(names)}")
                 check("all expected tools registered", expected <= names,
                       f"missing: {expected - names}")
 
@@ -262,33 +266,6 @@ def run_mcp_checks(base_url: str, username: str, password: str) -> None:
 
                 systems = await call("hdb_systems_overview")
                 check("hdb_systems_overview returns a list", isinstance(systems, list), f"got {systems}")
-
-                # -- write path: ownership permission boundary ------------
-                # crafts belongs to BEMC, not BTOF.
-                try:
-                    await call(
-                        "hdb_create_instance",
-                        component_name="PbWO4 Crystal",
-                        tag="smoke-test-should-fail",
-                        owner_group_name="BTOF",
-                    )
-                    check("create with foreign owner_group is rejected", False,
-                          "no exception raised — permission check did not fire")
-                except RuntimeError as exc:
-                    check("create with foreign owner_group is rejected", True, str(exc))
-
-                created = await call(
-                    "hdb_create_instance",
-                    component_name="PbWO4 Crystal",
-                    tag="smoke-test-ok",
-                    owner_group_name="BEMC",
-                )
-                check("create with own owner_group succeeds",
-                      isinstance(created, dict) and created.get("tag") == "smoke-test-ok",
-                      f"got {created}")
-                check("created instance is owned by the authenticated user",
-                      isinstance(created, dict) and created.get("owner_user") == username,
-                      f"got {created}")
 
     anyio.run(_run)
 

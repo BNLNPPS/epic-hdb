@@ -834,7 +834,15 @@ Error creating instance: Authentication required to create inventory records.
 ## 3. MCP server — `mcp_server.py`
 
 Exposes the same `hdb_client` layer over MCP (Streamable HTTP transport
-only — no stdio), so an MCP-aware AI assistant can query and update HDB.
+only — no stdio), so an MCP-aware AI assistant can query HDB.
+
+**Read-only by policy.** This server exposes query tools only — no
+create/update/delete tool is registered here, regardless of what
+`hdb_client` itself supports. A dialogue-driven agent connected over MCP
+cannot add, edit, or delete anything in HDB; every write path (the CLI's
+`create-instance`, the web app) still exists, just never wired up to a
+tool here. `smoke_test.py` asserts no such tool is present, as a guard
+against one being reintroduced by accident.
 
 ### Authentication
 
@@ -842,11 +850,13 @@ HTTP Basic Auth, checked against Django's own `auth.User` table (whatever
 accounts already exist — `/admin/`, `createsuperuser`, etc.). There's no
 separate credential store, and passwords are never logged or stored by this
 file. Every authenticated request is bound to that Django user for its
-duration, and every tool builds a `HDBClient(user=...)` scoped to them — so
-writes go through exactly the same ownership checks described above. A basic
-in-memory lockout (5 failed attempts per `client_ip:username` within 60s →
-30s lockout) adds brute-force friction; it's per-process and resets on
-restart, not a substitute for a real solution in a multi-worker deployment.
+duration, and every tool builds a `HDBClient(user=...)` scoped to them —
+kept mainly for who's-asking traceability now that every tool is read-only,
+and so a future tightening of read visibility in `hdb_client/access.py`
+would apply here automatically. A basic in-memory lockout (5 failed
+attempts per `client_ip:username` within 60s → 30s lockout) adds
+brute-force friction; it's per-process and resets on restart, not a
+substitute for a real solution in a multi-worker deployment.
 
 ### Setup
 
@@ -894,7 +904,9 @@ print(dir(FastMCP))"` against your installed version.
 | `hdb_list_institutions()` | `client.locations.all_institutions()` |
 | `hdb_location_tree(institution_abbreviation)` | `client.locations.location_tree()` |
 | `hdb_systems_overview()` | `client.systems.instance_counts()` |
-| `hdb_create_instance(component_name, tag="", serial_number="", description="", location_name=None, owner_group_name=None)` | `client.inventory.create()`, ownership always the authenticated caller |
+
+No write tool (create/update/delete) is registered — see "Read-only by
+policy" above.
 
 ### Talking to it from an MCP client
 
@@ -920,7 +932,9 @@ anyio.run(main)
 ### Testing it — `smoke_test.py`
 
 End-to-end check covering both the auth boundary (raw HTTP, no MCP protocol)
-and every tool (authenticated as the seed user `crafts`):
+and every tool (authenticated as the seed user `crafts`), plus a check that
+no write tool has been registered. Since nothing it calls mutates the
+database, running it repeatedly no longer leaves behind test data.
 
 ```bash
 # Terminal 1
@@ -933,9 +947,10 @@ python client/smoke_test.py
 python client/smoke_test.py --base-url http://127.0.0.1:8001 --username gnigmat --password gnigmat
 ```
 
-Last verified run: **24/24 checks passed**, including the write-path
-permission boundary (`crafts` can create an instance owned by BEMC, their own
-group, but is rejected trying to own one by BTOF).
+Last verified run (before the write tool was removed): **24/24 checks
+passed**. The suite hasn't been re-run against a live server since --
+worth doing once before relying on it, to confirm the updated tool-listing
+and no-write-tool checks pass against a running instance.
 
 ---
 
