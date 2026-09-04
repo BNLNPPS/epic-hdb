@@ -47,9 +47,9 @@ Setup
 -----
     pip install "mcp[cli]" django starlette uvicorn asgiref
 
-    # from the epiHDB project root (next to manage.py):
+    # from the epic-hdb project root (next to manage.py):
     DJANGO_SETTINGS_MODULE=hdb_project.settings \
-    HDB_PROJECT_ROOT=/path/to/epiHDB \
+    HDB_PROJECT_ROOT=/path/to/epic-hdb \
     HDB_MCP_PUBLIC_HOST=your-tunnel-hostname.trycloudflare.com \
     python client/mcp_server.py
 """
@@ -289,14 +289,14 @@ class BasicAuthMiddleware(BaseHTTPMiddleware):
         return JSONResponse(
             {"error": detail},
             status_code=401,
-            headers={"WWW-Authenticate": 'Basic realm="epiHDB"'},
+            headers={"WWW-Authenticate": 'Basic realm="epic-hdb"'},
         )
 
 
 # ---------------------------------------------------------------------
 # 4. MCP server + tools
 # ---------------------------------------------------------------------
-mcp = FastMCP("epiHDB")
+mcp = FastMCP("epic-hdb")
 
 # The mcp SDK's own DNS-rebinding protection (separate from
 # BasicAuthMiddleware -- this runs inside the SDK's transport layer) only
@@ -315,7 +315,7 @@ mcp = FastMCP("epiHDB")
 # this file each time -- just set the env var before launching:
 #
 #   HDB_MCP_PUBLIC_HOST=new-vhs-roses-chronicles.trycloudflare.com \
-#   HDB_PROJECT_ROOT=/path/to/epiHDB python client/mcp_server.py
+#   HDB_PROJECT_ROOT=/path/to/epic-hdb python client/mcp_server.py
 _PUBLIC_HOST = os.environ.get("HDB_MCP_PUBLIC_HOST")
 _allowed_hosts = ["127.0.0.1:*", "localhost:*"]
 _allowed_origins = [

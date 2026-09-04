@@ -14,7 +14,7 @@ Design) carries three fields relevant to access control:
 POLICY (explicit design decision — tighten if it doesn't match your needs):
 
   READ  : all authenticated users can read all catalog/inventory/design
-          rows. epiHDB is a shared collaboration database spanning many
+          rows. epic-hdb is a shared collaboration database spanning many
           institutions, and the schema has no per-row read-privacy flag.
           If you need per-institution or per-group read isolation, add
           the filter in `visible_to()` below — the hook is already wired

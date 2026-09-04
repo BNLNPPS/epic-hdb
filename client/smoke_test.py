@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 smoke_test.py — end-to-end check of mcp_server.py against a running
-instance, using the real epiHDB seed data (`python manage.py seed_hdb`).
+instance, using the real epic-hdb seed data (`python manage.py seed_hdb`).
 
 Covers two layers:
 
@@ -20,7 +20,7 @@ Covers two layers:
 
 Usage
 -----
-    # 1. In one terminal, from the epiHDB project root:
+    # 1. In one terminal, from the epic-hdb project root:
     python manage.py seed_hdb          # idempotent, safe to re-run
     HDB_PROJECT_ROOT=$(pwd) python client/mcp_server.py
 
