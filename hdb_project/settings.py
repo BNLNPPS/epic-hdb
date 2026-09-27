@@ -166,6 +166,7 @@ LOGOUT_REDIRECT_URL = 'login'
 # Static files
 
 STATIC_URL = 'static/'
+STATIC_ROOT = '/var/data/hdb/static'
 
 
 # Media (user-uploaded files: log attachments, property documents/images)

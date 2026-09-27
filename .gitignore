@@ -12,6 +12,12 @@ __pycache__/
 # Local DB
 db.sqlite3
 
+# Apache cong
+httpd.conf
+apache2.conf
+sites-available/
+sites-enabled/
+
 # Django stuff:
 # NOTE: migrations are intentionally tracked (hdb/migrations/*.py) --
 # they define the schema, and a fresh clone without them has no
