@@ -41,6 +41,10 @@ The seed_hdb command should contain the following entities:
 
 ## Deployment (epic-hwdb01, RHEL 9)
 
+Every time the tool "pip" is mentioned, use "pip3" on the deployment RHEL machine to
+sidestep ambiguity with the system version of pip, which is tied to an older
+Python. References to "pip" in this document are already pointing to "pip3" explicitely.
+
 Production/target host: `epic-hwdb01`, RHEL 9, user `eicmax`. Code is delivered
 via git only: changes are made and committed elsewhere, pushed to GitHub
 (`BNLNPPS/epic-hdb`), then pulled on the host. Do not edit files directly in
@@ -80,7 +84,7 @@ the host and fill in the real values.
   their transitive dependencies). RHEL 9's default `python3` is 3.9, which is
   too old; install `python3.12` from AppStream (`sudo dnf install python3.12`)
   or use `uv`.
-* Note: `requirements.txt` was generated with `pip freeze` from the shared dev
+* Note: `requirements.txt` was generated with `pip3 freeze` from the shared dev
   virtualenv, so it currently also includes packages that belong to the
   `hdb_client` CLI/MCP server (`mcp`, `uvicorn`, `starlette`, `httpx`, `typer`,
   etc.), not the Django web app. Fine for now, but worth splitting into a
@@ -91,11 +95,11 @@ the host and fill in the real values.
   `try/except ImportError` in `settings.py`, so a missing install won't crash
   the app, it will just silently disable the whole `/api/` surface that
   `hdb_client` depends on. It's in `requirements.txt` now, so a normal
-  `pip install -r requirements.txt` covers it — just don't skip that step.
+  `pip3 install -r requirements.txt` covers it — just don't skip that step.
 * Plan:
   1. Clone the repo as `eicmax` outside the web root (location to be decided,
      for example `~/epic-hdb`), and create a virtualenv with Python 3.12.
-  2. Install dependencies: `pip install -r requirements.txt`.
+  2. Install dependencies: `pip3 install -r requirements.txt`.
   3. Production settings: read `SECRET_KEY`, `DEBUG=False`, `ALLOWED_HOSTS`,
      `CSRF_TRUSTED_ORIGINS` and the database credentials from the environment
      (currently hardcoded, with `DEBUG = True` and `ALLOWED_HOSTS = ['*']`).
@@ -105,7 +109,7 @@ the host and fill in the real values.
   6. Run gunicorn under a systemd unit (dedicated service user, restart on
      failure, environment file readable only by that user), and point httpd at it.
 * After each `git pull` on the host: activate the venv, run
-  `pip install -r requirements.txt` again (in case it changed), then `migrate`
+  `pip3 install -r requirements.txt` again (in case it changed), then `migrate`
   and `collectstatic`, then restart the gunicorn service. Back up the database
   (`pg_dump`) before any migration.
 
