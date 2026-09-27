@@ -60,9 +60,12 @@ the host and fill in the real values.
   service name, port, data directory, and the `pg_hba.conf` auth method.
 * The app should use a dedicated database and role. Verify on host: their names.
   Passwords come from the environment or a root-owned file, never from git.
-* Note: the checked-in `hdb_project/settings.py` still uses SQLite
-  (`db.sqlite3`). Switching `DATABASES` to PostgreSQL (`psycopg`) is [TODO].
-  Data must be migrated or reseeded (`seed_hdb`), not copied as a file.
+* [running] `hdb_project/settings.py` now switches `DATABASES` on the
+  `DJANGO_DB_TYPE` environment variable (`sqlite` for local dev, `postgres`
+  here). Postgres mode reads `DJANGO_DB_NAME`/`USER`/`PASSWORD`/`HOST`/`PORT`
+  from the environment — set via the `/etc/hdb/env` file, never hardcoded
+  or committed. Data must be migrated/reseeded (`seed_hdb`), not copied as
+  a file.
 
 ### Apache httpd [running]
 * Already installed and running. Verify on host: version, config files under
@@ -97,8 +100,8 @@ the host and fill in the real values.
   `hdb_client` depends on. It's in `requirements.txt` now, so a normal
   `pip3 install -r requirements.txt` covers it — just don't skip that step.
 * Plan:
-  1. Clone the repo as `eicmax` outside the web root (location to be decided,
-     for example `~/epic-hdb`), and create a virtualenv with Python 3.12.
+  1. Clone the repo as `eicmax` outside the web root — settled at
+     `~/projects/epic-hdb` — and create a virtualenv with Python 3.12.
   2. Install dependencies: `pip3 install -r requirements.txt`.
   3. Production settings: read `SECRET_KEY`, `DEBUG=False`, `ALLOWED_HOSTS`,
      `CSRF_TRUSTED_ORIGINS` and the database credentials from the environment
@@ -108,6 +111,23 @@ the host and fill in the real values.
      dev `seed_hdb` users or passwords in production).
   6. Run gunicorn under a systemd unit (dedicated service user, restart on
      failure, environment file readable only by that user), and point httpd at it.
+  7. Smoke-check the app and database directly (no server, no HTTP, no auth)
+     using the local CLI client already in the repo:
+     ```
+     source venv/bin/activate
+     set -a; source /etc/hdb/env; set +a
+     python client/hdb.py institutions
+     python client/hdb.py systems
+     python client/hdb.py search Crystal
+     python client/hdb.py component "PbWO4 Crystal"
+     ```
+     This queries the same Postgres DB the running app uses, in-process —
+     confirms `migrate`/`seed_hdb` actually landed real data. Don't confuse
+     this with `client/mcp_server.py` + `client/smoke_test.py`: that pair
+     stands up its own HTTP+MCP server process to test the network-facing
+     MCP endpoint (for an agent/connector talking to HDB remotely) — a
+     separate concern, not part of the running deployment unless/until
+     that's wired up on its own.
 * After each `git pull` on the host: activate the venv, run
   `pip3 install -r requirements.txt` again (in case it changed), then `migrate`
   and `collectstatic`, then restart the gunicorn service. Back up the database
