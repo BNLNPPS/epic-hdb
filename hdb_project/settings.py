@@ -2,7 +2,10 @@
 Django settings for hdb_project project.
 """
 
+import os
 from pathlib import Path
+
+from django.core.exceptions import ImproperlyConfigured
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -96,13 +99,41 @@ WSGI_APPLICATION = 'hdb_project.wsgi.application'
 
 
 # Database
+#
+# DJANGO_DB_TYPE selects the backend: "sqlite" for local development,
+# "postgres" for the RHEL deployment server. Defaults to "sqlite" so an
+# unset variable behaves like the previous hardcoded default instead of
+# silently trying to reach a Postgres server.
 
-DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
+DJANGO_DB_TYPE = os.environ.get('DJANGO_DB_TYPE', 'sqlite').lower()
+
+if DJANGO_DB_TYPE == 'sqlite':
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.sqlite3',
+            'NAME': BASE_DIR / 'db.sqlite3',
+        }
     }
-}
+elif DJANGO_DB_TYPE == 'postgres':
+    try:
+        DATABASES = {
+            'default': {
+                'ENGINE': 'django.db.backends.postgresql',
+                'NAME': os.environ['DJANGO_DB_NAME'],
+                'USER': os.environ['DJANGO_DB_USER'],
+                'PASSWORD': os.environ['DJANGO_DB_PASSWORD'],
+                'HOST': os.environ.get('DJANGO_DB_HOST', '127.0.0.1'),
+                'PORT': os.environ.get('DJANGO_DB_PORT', '5432'),
+            }
+        }
+    except KeyError as exc:
+        raise ImproperlyConfigured(
+            f"DJANGO_DB_TYPE=postgres requires {exc} to be set in the environment"
+        ) from exc
+else:
+    raise ImproperlyConfigured(
+        f"DJANGO_DB_TYPE={DJANGO_DB_TYPE!r} is not valid; expected 'sqlite' or 'postgres'"
+    )
 
 
 # Password validation

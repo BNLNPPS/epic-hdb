@@ -706,3 +706,16 @@ python manage.py makemigrations hdb
 python manage.py migrate
 python manage.py seed_hdb
 ```
+
+---
+
+## Shell environment for deployment
+
+```bash
+DJANGO_SECRET_KEY=some-long-random-string
+DJANGO_DB_NAME=hwdb
+DJANGO_DB_USER=hwdb_user
+DJANGO_DB_PASSWORD=XYZ
+DJANGO_DB_HOST=127.0.0.1
+DJANGO_DB_PORT=5432
+```
