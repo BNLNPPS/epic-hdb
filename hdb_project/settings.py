@@ -17,7 +17,11 @@ ALLOWED_HOSTS = ['*']
 # ALLOWED_HOSTS = ['wondering-association-thumb-pieces.trycloudflare.com', 'localhost', '127.0.0.1']
 CSRF_TRUSTED_ORIGINS = [
     "https://*.trycloudflare.com",
+    "https://epic-hwdb.sdcc.bnl.gov",
 ]
+
+
+SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 
 # fields.W342: DesignElementInstance.instance is a ForeignKey(unique=True)
 # rather than a OneToOneField. Deliberate -- the DB constraint is identical
