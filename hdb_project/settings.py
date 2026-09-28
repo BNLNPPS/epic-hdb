@@ -9,12 +9,26 @@ from django.core.exceptions import ImproperlyConfigured
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-SECRET_KEY = 'django-insecure-w_f-4jto%ot**s#x%z7&t9=ocv=fm_bmqiq)*=cwc(oe5*+g7m'
+# DJANGO_DEBUG / DJANGO_ALLOWED_HOSTS / DJANGO_SECRET_KEY are read from the
+# environment (see /etc/hdb/env on RHEL) so production can be locked down
+# without editing this file. Unlike DJANGO_DB_TYPE below, these default to
+# the *safe* choice when unset -- forgetting to set DJANGO_DEBUG in prod
+# must not silently reopen debug pages the way an unset DJANGO_DB_TYPE
+# silently fell back to sqlite once. Local dev sets DJANGO_DEBUG=true (e.g.
+# in the venv's activate script) to get debug pages and runserver's
+# built-in static-file serving back.
+SECRET_KEY = os.environ.get(
+    'DJANGO_SECRET_KEY',
+    'django-insecure-w_f-4jto%ot**s#x%z7&t9=ocv=fm_bmqiq)*=cwc(oe5*+g7m',
+)
 
-DEBUG = True
+DEBUG = os.environ.get('DJANGO_DEBUG', 'false').lower() in ('1', 'true', 'yes', 'on')
 
-ALLOWED_HOSTS = ['*']
-# ALLOWED_HOSTS = ['wondering-association-thumb-pieces.trycloudflare.com', 'localhost', '127.0.0.1']
+ALLOWED_HOSTS = [
+    h.strip()
+    for h in os.environ.get('DJANGO_ALLOWED_HOSTS', 'localhost,127.0.0.1').split(',')
+    if h.strip()
+]
 CSRF_TRUSTED_ORIGINS = [
     "https://*.trycloudflare.com",
     "https://epic-hwdb.sdcc.bnl.gov",
