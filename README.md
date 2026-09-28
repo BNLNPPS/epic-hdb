@@ -719,3 +719,11 @@ DJANGO_DB_PASSWORD=XYZ
 DJANGO_DB_HOST=127.0.0.1
 DJANGO_DB_PORT=5432
 ```
+
+## Setting the Django and other environment on the deployment machine
+
+```bash
+cd ~/projects/epic-hdb
+source ~/.virtualenvs/hdb/bin/activate
+set -a; source /etc/hdb/env; set +a
+```
