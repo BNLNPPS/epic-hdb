@@ -37,6 +37,14 @@ CSRF_TRUSTED_ORIGINS = [
 
 SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 
+# Apache forwards the original Host header as X-Forwarded-Host (see
+# deploy/httpd/hdb.conf's RequestHeader line) because ProxyPass sends
+# requests to gunicorn as http://127.0.0.1:8002/, so without this
+# Django would otherwise build absolute URIs (e.g. the DRF browsable
+# API's hyperlinks) using that internal address instead of the public
+# hostname, leaking the backend's loopback port to anyone hitting /api/.
+USE_X_FORWARDED_HOST = True
+
 # fields.W342: DesignElementInstance.instance is a ForeignKey(unique=True)
 # rather than a OneToOneField. Deliberate -- the DB constraint is identical
 # either way, but a real OneToOneField's reverse accessor returns a single
