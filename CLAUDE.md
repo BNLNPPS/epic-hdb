@@ -82,6 +82,15 @@ the host and fill in the real values.
   `export DJANGO_DB_TYPE=postgres` to `~/.virtualenvs/hdb/bin/activate` so a
   bare shell fails loudly (`ImproperlyConfigured`, missing credentials)
   instead of silently succeeding against sqlite.
+* **Policy: the real `/etc/hdb/env` is never committed to this repo,**
+  full stop — it holds `DJANGO_SECRET_KEY`, `DJANGO_DB_PASSWORD`, and
+  will likely accumulate more secrets over time, and it's too easy to
+  `git add` a working copy by accident while debugging on the host.
+  `.gitignore` has explicit patterns to catch a stray copy if one ever
+  ends up inside the repo tree. `deploy/env.example` documents the keys
+  it must contain, with placeholder values only — keep that file in
+  sync by hand whenever a new `DJANGO_*` variable is added to
+  `settings.py`; nothing enforces that automatically.
 
 ### Apache httpd [running]
 * Config lives in `/etc/httpd/conf/httpd.conf` (the `<VirtualHost *:80>`
@@ -120,6 +129,46 @@ the host and fill in the real values.
   SELinux.
 * Media: `MEDIA_ROOT` in settings is `/var/data/hdb/media`; this directory
   must exist, be writable by the app user, and be readable by httpd.
+* **Gotcha (bit us once, 2026-09-28):** the DRF browsable API at `/api/`
+  builds its hyperlinks from `request.get_host()`, and because
+  `ProxyPass / http://127.0.0.1:8002/` doesn't preserve the original
+  Host header, those links were showing gunicorn's internal
+  `http://127.0.0.1:8002/...` instead of the public hostname. Tried to
+  fix it by setting `USE_X_FORWARDED_HOST = True` in `settings.py` and
+  relying on Apache's `ProxyAddHeaders On` default to supply
+  `X-Forwarded-Host` automatically. Result: **every single request on
+  the live site started 400ing** (`DisallowedHost`) the moment it was
+  deployed. The obvious theory — that Apache's automatic header was
+  colliding with a manually-added `RequestHeader set X-Forwarded-Host`
+  directive, producing a merged `"host, host"` value that fails the
+  `ALLOWED_HOSTS` check — turned out to be wrong for this outage: no
+  such `RequestHeader` line was ever actually present in the live
+  `ssl.conf` (confirmed by grepping the file directly). The real
+  mechanism was never conclusively identified; the SDCC lab's own
+  outer reverse proxy sits in front of this Apache and may itself be
+  injecting Host-related headers before this box ever sees the
+  request, but that's a hypothesis, not a confirmed cause. **Fixed by
+  reverting through git** — commented out `USE_X_FORWARDED_HOST = True`
+  in `settings.py`, committed on the dev machine, pulled + restarted
+  gunicorn on RHEL (deliberately *not* hand-patched live on RHEL, to
+  avoid the kind of untracked drift the `DJANGO_DB_TYPE` incident left
+  behind). **Current state, accepted as-is:** `USE_X_FORWARDED_HOST` is
+  off; `/api/` hyperlinks show the internal `127.0.0.1:8002` address
+  again. This is cosmetic, not a security exposure (that address isn't
+  reachable from outside the host) — **do not re-attempt this fix
+  without first getting visibility into what headers the SDCC outer
+  proxy actually sends** (e.g. by logging request headers gunicorn
+  receives for one real request), rather than reasoning about the
+  proxy chain from the RHEL Apache config alone.
+* **Loose end from the above, not yet resolved:** `ProxyPreserveHost`
+  was found commented out in the live `:443` block in `ssl.conf` during
+  this troubleshooting (it predates this session and its original
+  purpose is unknown). It was toggled off as part of the
+  investigation and never consciously restored either way. `ssl.conf`
+  is hand-maintained on RHEL and not git-tracked, so this state isn't
+  captured anywhere else — worth deciding deliberately (on or off)
+  next time this file is touched, rather than leaving it as an
+  accident of troubleshooting.
 * `deploy/systemd/hdb-gunicorn.service` in this repo mirrors the installed
   `/etc/systemd/system/hdb-gunicorn.service` unit.
 
@@ -150,9 +199,15 @@ the host and fill in the real values.
      Python 3.12.
   2. [done] `pip3 install -r requirements.txt`.
   3. Production settings: `CSRF_TRUSTED_ORIGINS` now includes
-     `https://epic-hwdb.sdcc.bnl.gov` **[done]**. `SECRET_KEY`, `DEBUG=False`,
-     `ALLOWED_HOSTS` still **[TODO]** — currently hardcoded, with
-     `DEBUG = True` and `ALLOWED_HOSTS = ['*']`.
+     `https://epic-hwdb.sdcc.bnl.gov` **[done]**. `SECRET_KEY`, `DEBUG`,
+     `ALLOWED_HOSTS` **[done, 2026-09-28]** — all three now read from
+     `DJANGO_SECRET_KEY` / `DJANGO_DEBUG` / `DJANGO_ALLOWED_HOSTS` in
+     `/etc/hdb/env` (same mechanism as `DJANGO_DB_TYPE`), with one
+     deliberate difference: these three default to the *safe* choice
+     when unset (`DEBUG` off, `ALLOWED_HOSTS` to `localhost,127.0.0.1`
+     only) rather than defaulting open, precisely so a missing env var
+     here fails closed instead of repeating the `DJANGO_DB_TYPE`
+     silent-sqlite-fallback mistake in the other direction.
   4. [done] `STATIC_ROOT` set (`/var/data/hdb/static`), `collectstatic` run.
   5. [done] `python manage.py migrate`, admin user created (not the dev
      `seed_hdb` users/passwords). See the `DJANGO_DB_TYPE` gotcha above —

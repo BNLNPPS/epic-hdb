@@ -12,6 +12,15 @@ __pycache__/
 # Local DB
 db.sqlite3
 
+# Deployment secrets. The real env file (DJANGO_SECRET_KEY,
+# DJANGO_DB_PASSWORD, etc.) lives only at /etc/hdb/env on the
+# production host, root-owned, and must never be committed -- these
+# patterns catch an accidental local copy. See deploy/env.example for
+# the documented, secret-free template of what keys it needs.
+/env
+/deploy/env
+*.env.local
+
 # Apache cong
 httpd.conf
 apache2.conf
