@@ -727,3 +727,9 @@ cd ~/projects/epic-hdb
 source ~/.virtualenvs/hdb/bin/activate
 set -a; source /etc/hdb/env; set +a
 ```
+
+## Updating the running code on the deployment machine:
+
+```bash
+sudo systemctl restart hdb-gunicorn
+```
