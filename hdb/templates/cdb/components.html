@@ -42,11 +42,14 @@ dialog.modal::backdrop { background: rgba(20,23,34,.45); }
     <h1>Component Catalog</h1>
     <div class="page-subtitle">Reference library of component types</div>
   </div>
+  {% if can_create %}
   <button type="button" class="btn btn-primary" onclick="document.getElementById('new-component-modal').showModal()">
     + New Component
   </button>
+  {% endif %}
 </div>
 
+{% if can_create %}
 <dialog id="new-component-modal" class="modal">
   <form method="post" action="{% url 'component-list' %}">
     {% csrf_token %}
@@ -81,6 +84,7 @@ dialog.modal::backdrop { background: rgba(20,23,34,.45); }
     </div>
   </form>
 </dialog>
+{% endif %}
 <script>
   (function () {
     var dlg = document.getElementById('new-component-modal');

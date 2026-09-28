@@ -230,6 +230,13 @@ try:
         """
         GET    /api/inventory/<id>/   retrieve a single component instance
         DELETE /api/inventory/<id>/   delete a single component instance, by id
+
+        DELETE is gated the same way as the web UI's inventory_delete: only
+        a member of the instance's own owner_group, or a superuser, may
+        delete it -- anyone else gets 403. IsAuthenticated alone (the
+        project-wide DRF default) is not sufficient authorization for a
+        destructive endpoint; this check is what actually enforces the
+        group-ownership model here, same as everywhere else in the app.
         """
         queryset = ComponentInstance.objects.prefetch_related(
             "properties__property_type", "log_entries"
@@ -239,6 +246,16 @@ try:
 
         def destroy(self, request, *args, **kwargs):
             instance = self.get_object()
+            user_group_ids = set(request.user.groups.values_list('id', flat=True))
+            can_delete = (
+                (bool(instance.owner_group_id) and instance.owner_group_id in user_group_ids)
+                or request.user.is_superuser
+            )
+            if not can_delete:
+                return Response(
+                    {"detail": "You don't have permission to delete this component instance."},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
             try:
                 instance.delete()
             except ProtectedError as exc:

@@ -260,12 +260,20 @@ def component_list(request):
     """List/search the component catalog. Also handles the "New Component"
     pop-up form: a POST here (name, alternate_name, model_number,
     technical_system -- the same fields shown in the table) creates a
-    Component and redirects to its detail page. On validation failure the
+    Component and redirects to its detail page. Component has no
+    owner_group of its own to check membership against at creation time
+    (that gets set afterward, e.g. by seed_hdb or a direct edit) -- same
+    situation as Location, so creation is superuser-only, same policy as
+    location_create/template_delete, enforced server-side with 403 on an
+    unauthorized POST, not just a hidden button. On validation failure the
     list re-renders with the modal reopened and the entered values kept."""
     form_error = None
     form_data  = {}
+    can_create = request.user.is_superuser
 
     if request.method == 'POST':
+        if not can_create:
+            return HttpResponseForbidden("You don't have permission to create a new component.")
         name                 = request.POST.get('name', '').strip()
         alternate_name       = request.POST.get('alternate_name', '').strip()
         model_number         = request.POST.get('model_number', '').strip()
@@ -341,6 +349,7 @@ def component_list(request):
         'groups':      Group.objects.order_by('name'),
         'query_str':   _qs(request),
         'active_page': 'components',
+        'can_create':  can_create,
         'form_error':  form_error,
         'form_data':   form_data,
         'open_modal':  bool(form_error),
