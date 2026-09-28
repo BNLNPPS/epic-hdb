@@ -1,0 +1,17 @@
+# Installed as /etc/systemd/system/hdb-gunicorn.service on epic-hwdb01.
+# After editing: sudo systemctl daemon-reload && sudo systemctl restart hdb-gunicorn
+[Unit]
+Description=Gunicorn daemon for epic-hdb
+After=network.target postgresql.service
+
+[Service]
+User=eicmax
+Group=eicmax
+WorkingDirectory=/direct/eic+u/eicmax/projects/epic-hdb
+EnvironmentFile=/etc/hdb/env
+ExecStart=/direct/eic+u/eicmax/.virtualenvs/hdb/bin/gunicorn --workers 3 --bind 127.0.0.1:8002 hdb_project.wsgi:application
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
