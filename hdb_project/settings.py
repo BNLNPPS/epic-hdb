@@ -43,7 +43,10 @@ SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 # Django would otherwise build absolute URIs (e.g. the DRF browsable
 # API's hyperlinks) using that internal address instead of the public
 # hostname, leaking the backend's loopback port to anyone hitting /api/.
-USE_X_FORWARDED_HOST = True
+
+### Attention!
+
+# USE_X_FORWARDED_HOST = True
 
 # fields.W342: DesignElementInstance.instance is a ForeignKey(unique=True)
 # rather than a OneToOneField. Deliberate -- the DB constraint is identical
