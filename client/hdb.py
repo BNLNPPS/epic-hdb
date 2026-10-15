@@ -42,6 +42,7 @@ Options
 import argparse
 import yaml
 import os
+import json
 import sys
 
 
@@ -275,6 +276,16 @@ def cmd_load_template(client, args):
             else:
                 comp_status = " (component created)" if el["component_created"] else ""
                 print(f"  - {el['element_name']}: {el['component']}{comp_status} [{el_status}]")
+
+    drifted = [r for r in outcome["templates"] if r.get("drift")]
+    if drifted:
+        print(f"\nWARNING: {len(drifted)} existing template(s) differ from {args.file!r}. "
+              f"Loading never overwrites existing templates, so they were NOT changed "
+              f"and NOT re-stamped with this file's hash:", file=sys.stderr)
+        for r in drifted:
+            print(f"  - {r['template']}: {json.dumps(r['drift'], default=str)}", file=sys.stderr)
+        print("  Run `hdb verify-template` for details; fix the database (admin/web UI) "
+              "or the YAML so they agree.", file=sys.stderr)
 
     resolution = outcome["resolution"]
     if resolution["resolved"]:
@@ -584,6 +595,8 @@ def cmd_create_instance(client, args):
       location: "Room 112B"
       group: BEMC
       description: "Batch 7, received 2024-03-15"
+      institution: BNL        # optional: disambiguates a location name used at several institutions
+      project: ePIC           # optional: disambiguates a component name used in several projects
     """
     # ── Load inputs: YAML file or individual flags ───────────────────────────
     if args.from_yaml:
@@ -608,6 +621,8 @@ def cmd_create_instance(client, args):
         location    = data_in.get("location")
         group       = data_in.get("group")
         description = str(data_in.get("description", ""))
+        institution = data_in.get("institution")
+        project     = data_in.get("project")
     else:
         by_name     = args.by_name
         by_pk       = args.by_pk
@@ -616,6 +631,8 @@ def cmd_create_instance(client, args):
         location    = args.location
         group       = args.group
         description = args.description
+        institution = args.institution
+        project     = args.project
 
     if not by_name and not by_pk:
         print("Error: supply --by-name or --by-pk (or set by_name/by_pk in the YAML file)",
@@ -638,6 +655,8 @@ def cmd_create_instance(client, args):
             description=description,
             location_name=location,
             owner_group_name=group,
+            institution_name=institution,
+            project=project,
         )
     except Exception as exc:
         print(f"Error creating instance: {exc}", file=sys.stderr)
@@ -735,6 +754,12 @@ def build_parser():
                          "--user must belong to it (or be staff/superuser)")
     sp.add_argument("--description", metavar="TEXT",   default="",
                     help="Free-text description")
+    sp.add_argument("--institution", metavar="NAME",   default=None,
+                    help="Institution of --location; needed when the location "
+                         "name exists at more than one institution")
+    sp.add_argument("--project",     metavar="NAME",   default=None,
+                    help="Project of --by-name; needed when the component "
+                         "name exists in more than one project")
 
     sp = sub.add_parser("load-template",
                         help="Load DesignTemplate(s) from a YAML file (data/ by default)")

@@ -96,9 +96,17 @@ class InventoryClient:
         description: str = "",
         location_name: str | None = None,
         owner_group_name: str | None = None,
+        institution_name: str | None = None,
+        project: str | None = None,
     ) -> dict:
         """
         Create a ComponentInstance.
+
+        Component names are only unique per project, and Location names per
+        institution, so a bare name can be ambiguous. Pass `project`
+        and/or `institution_name` to disambiguate; an ambiguous name
+        without them raises ValueError listing the candidates (never
+        picks one silently).
 
         Ownership is NEVER taken from caller input:
           - owner_user is always the authenticated self.user
@@ -118,23 +126,41 @@ class InventoryClient:
         if not component_name and not component_pk:
             raise ValueError("Supply component_name or component_pk.")
         try:
-            component = (
-                m.Component.objects.get(pk=component_pk)
-                if component_pk
-                else m.Component.objects.get(name=component_name)
-            )
+            if component_pk:
+                component = m.Component.objects.get(pk=component_pk)
+            else:
+                qs = m.Component.objects.filter(name=component_name)
+                if project:
+                    qs = qs.filter(project=project)
+                component = qs.get()
         except m.Component.DoesNotExist:
             raise ValueError(f"Component not found: {component_pk or component_name!r}")
+        except m.Component.MultipleObjectsReturned:
+            options = ", ".join(f"{c.project} ({c.pk})" for c in qs)
+            raise ValueError(
+                f"Component name {component_name!r} is ambiguous; pass project "
+                f"or the component pk. Candidates: {options}"
+            )
 
         if not location_name:
             raise ValueError(
                 "A location is required to create an inventory instance "
                 "(e.g. the manufacturer, or a shipping/transit location)."
             )
+        loc_qs = m.Location.objects.filter(name=location_name)
+        if institution_name:
+            loc_qs = loc_qs.filter(institution__name=institution_name)
         try:
-            location = m.Location.objects.get(name=location_name)
+            location = loc_qs.get()
         except m.Location.DoesNotExist:
-            raise ValueError(f"Location not found: {location_name!r}")
+            raise ValueError(f"Location not found: {location_name!r}"
+                             + (f" at institution {institution_name!r}" if institution_name else ""))
+        except m.Location.MultipleObjectsReturned:
+            options = ", ".join(f"{l.institution.name}" for l in loc_qs.select_related("institution"))
+            raise ValueError(
+                f"Location name {location_name!r} is ambiguous; pass the institution. "
+                f"Institutions with that location: {options}"
+            )
 
         owner_group = access.resolve_owner_group_for_create(owner_group_name, self.user)
 

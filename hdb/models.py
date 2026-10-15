@@ -300,7 +300,20 @@ class Component(OwnedModel):
     def save(self, *args, **kwargs):
         if not self.id:
             self.id = str(uuid.uuid4())
+        old_ts_id = None
+        if not self._state.adding:
+            old_ts_id = (type(self).objects.filter(pk=self.pk)
+                         .values_list("technical_system_id", flat=True).first())
         super().save(*args, **kwargs)
+        if old_ts_id != self.technical_system_id and not self._state.adding:
+            # Instances copy technical_system from their component. Keep
+            # the ones that were still inheriting (same as the old value,
+            # or blank) in step, so system filters don't drift.
+            ComponentInstance.objects.filter(
+                component_id=self.pk,
+            ).filter(
+                models.Q(technical_system_id=old_ts_id) | models.Q(technical_system_id__isnull=True)
+            ).update(technical_system_id=self.technical_system_id)
 
     def __str__(self):
         return self.name
@@ -743,7 +756,7 @@ class DesignTemplateElement(models.Model):
     id = models.CharField(max_length=36, primary_key=True, editable=False)
     template       = models.ForeignKey(DesignTemplate, on_delete=models.CASCADE, related_name="elements")
     element_name   = models.CharField(max_length=128)
-    component      = models.ForeignKey(Component, null=True, blank=True, on_delete=models.CASCADE, related_name="template_memberships")
+    component      = models.ForeignKey(Component, null=True, blank=True, on_delete=models.PROTECT, related_name="template_memberships")
     child_template = models.ForeignKey(
         DesignTemplate, null=True, blank=True, on_delete=models.PROTECT, related_name="parent_elements",
         help_text="Nested sub-template placeholder, e.g. a Stave's element pointing at the Half-Stave template. "
@@ -966,8 +979,8 @@ class DesignElement(models.Model):
     id = models.CharField(max_length=36, primary_key=True, editable=False)
     design             = models.ForeignKey(Design,             on_delete=models.CASCADE,  related_name="elements")
     element_name       = models.CharField(max_length=128)
-    component          = models.ForeignKey(Component,         null=True, blank=True, on_delete=models.SET_NULL, related_name="design_memberships")
-    child_design       = models.ForeignKey(Design,            null=True, blank=True, on_delete=models.SET_NULL, related_name="parent_elements")
+    component          = models.ForeignKey(Component,         null=True, blank=True, on_delete=models.PROTECT, related_name="design_memberships")
+    child_design       = models.ForeignKey(Design,            null=True, blank=True, on_delete=models.PROTECT, related_name="parent_elements")
     quantity           = models.PositiveIntegerField(default=1)
     description        = models.TextField(blank=True)
 

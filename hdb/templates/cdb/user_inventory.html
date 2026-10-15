@@ -30,7 +30,7 @@
         <td><a href="{% url 'inventory-detail' inst.pk %}" style="font-family:monospace;font-size:12px">{{ inst.pk|slice:":8" }}&hellip;</a></td>
         <td>{{ inst.tag|default:"—" }}</td>
         <td><a href="{% url 'component-detail' inst.component.pk %}">{{ inst.component.name }}</a></td>
-        <td>{{ inst.technical_system|default:"—" }}</td>
+        <td>{{ inst.component.technical_system|default:"—" }}</td>
         <td>{{ inst.serial_number|default:"—" }}</td>
         <td>{{ inst.location|default:"—" }}</td>
         <td>{{ inst.owner_group|default:"—" }}</td>

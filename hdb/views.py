@@ -62,11 +62,11 @@ try:
             "groups":         reverse("group-list",        request=request),
             "institutions":   reverse("institution-list-api",  request=request),
             "locations":      reverse("location-list",     request=request),
-            "components":     reverse("component-list",    request=request),
+            "components":     reverse("component-list-api",    request=request),
             "inventory":      reverse("instance-list",     request=request),
-            "designs":        reverse("design-list",       request=request),
+            "designs":        reverse("design-list-api",       request=request),
             "property_types": reverse("propertytype-list", request=request),
-            "logs":           reverse("log-list",          request=request),
+            "logs":           reverse("log-list-api",          request=request),
         })
 
     # ── Groups ────────────────────────────────────────────────────────────────

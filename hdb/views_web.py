@@ -10,9 +10,11 @@ from urllib.parse import urlencode
 from django.shortcuts import render, get_object_or_404, redirect
 from django.urls import reverse
 from django.http import HttpResponseForbidden, HttpResponseNotAllowed, HttpResponse
+from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.models import User, Group
 from django.core.exceptions import ValidationError
+from django.db import transaction
 from django.db.models import Q, Count
 from django.core.paginator import Paginator
 from django.utils import timezone
@@ -26,6 +28,18 @@ from .models import (
     TEMPLATE_NESTING_MAX_DEPTH,
 )
 
+
+
+def _property_get_or_create(defaults=None, **lookup):
+    """PropertyValue.objects.get_or_create, tolerant of pre-existing
+    duplicate rows for the same (owner, property_type, tag): the model has
+    no unique constraint, so a plain get_or_create raises
+    MultipleObjectsReturned (HTTP 500) once duplicates exist. Duplicates
+    are resolved to the oldest-keyed row, which the caller then updates."""
+    existing = PropertyValue.objects.filter(**lookup).order_by('pk').first()
+    if existing is not None:
+        return existing, False
+    return PropertyValue.objects.create(**lookup, **(defaults or {})), True
 
 PAGE_SIZE = 20
 
@@ -402,7 +416,7 @@ def component_detail(request, pk):
             # Re-submitting the same combination (e.g. re-uploading a
             # replacement datasheet) should update that one row in place,
             # not create a second row that duplicates it in the panel.
-            pv, created = PropertyValue.objects.get_or_create(
+            pv, created = _property_get_or_create(
                 component=comp, property_type_id=property_type_id, tag=tag,
                 defaults={'value': value, 'units': units, 'file': uploaded_file},
             )
@@ -895,10 +909,22 @@ def inventory_batch_update_location(request):
 
     changed = []
     if new_location:
-        changed = [
+        candidates = [
             inst for inst in qs.select_related('location')
             if inst.location_id != new_location.pk
         ]
+        # Invariant: an installed instance lives where its design lives.
+        # Moving it on its own would silently break that, so installed
+        # instances are skipped (and counted) -- uninstall them first.
+        installed_ids = set(
+            DesignElementInstance.objects
+            .filter(instance_id__in=[i.pk for i in candidates])
+            .values_list('instance_id', flat=True)
+        )
+        changed = [i for i in candidates if i.pk not in installed_ids]
+        skipped_installed = len(installed_ids)
+    else:
+        skipped_installed = 0
     if changed:
         LogEntry.objects.bulk_create([
             LogEntry(
@@ -916,9 +942,11 @@ def inventory_batch_update_location(request):
         ])
         ComponentInstance.objects.filter(
             pk__in=[inst.pk for inst in changed]
-        ).update(location_id=new_location.pk)
+        ).update(location_id=new_location.pk, modified_on=timezone.now())
 
-    return _inventory_batch_redirect(request, batch_updated=len(changed))
+    return _inventory_batch_redirect(
+        request, batch_updated=len(changed), batch_skipped=skipped_installed,
+    )
 
 
 @login_required
@@ -1033,7 +1061,7 @@ def inventory_property_update(request, pk, property_id):
                 pv.units = units
                 pv.save()
             else:
-                override, created = PropertyValue.objects.get_or_create(
+                override, created = _property_get_or_create(
                     component_instance=instance, property_type_id=pv.property_type_id, tag=pv.tag,
                     defaults={'value': value, 'units': units},
                 )
@@ -1092,7 +1120,7 @@ def inventory_detail(request, pk):
             # Same reasoning as component_detail: (component_instance,
             # property_type, tag) identifies "the same property" -- update
             # it in place on resubmission instead of creating a duplicate.
-            pv, created = PropertyValue.objects.get_or_create(
+            pv, created = _property_get_or_create(
                 component_instance=instance, property_type_id=property_type_id, tag=tag,
                 defaults={'value': value, 'units': units, 'file': uploaded_file},
             )
@@ -1182,6 +1210,14 @@ def inventory_update_location(request, pk):
         new_location = Location.objects.filter(pk=location_id).first() if location_id else None
 
         if new_location and new_location != old_location:
+            if instance.design_installations.exists():
+                messages.error(
+                    request,
+                    "This item is installed in a design, so it can't be moved "
+                    "on its own. Uninstall it from the design first, or change "
+                    "the design's location.",
+                )
+                return redirect('inventory-detail', pk=instance.pk)
             instance.location_id = new_location.pk
             instance.save()
             LogEntry.objects.create(
@@ -1526,7 +1562,7 @@ def design_detail(request, pk):
         if not property_type_id:
             form_error = 'Property Type is required.'
         else:
-            pv, created = PropertyValue.objects.get_or_create(
+            pv, created = _property_get_or_create(
                 design=design, property_type_id=property_type_id, tag=tag,
                 defaults={'value': value, 'units': units, 'file': uploaded_file},
             )
@@ -1653,10 +1689,126 @@ def design_delete(request, pk):
     if request.method == 'POST':
         if not can_delete:
             return HttpResponseForbidden("You don't have permission to delete this design.")
-        design.delete()
+        # A design that is a sub-assembly of another design can't be deleted
+        # out from under its parent (that would leave a ghost element).
+        parents = list(
+            Design.objects.filter(elements__child_design=design).distinct()
+        )
+        if parents:
+            messages.error(
+                request,
+                "This design is a sub-assembly of "
+                + ", ".join(p.name for p in parents)
+                + ". Remove it from there first.",
+            )
+            return redirect('design-detail', pk=design.pk)
+        with transaction.atomic():
+            # Child designs created for this design go with it, unless some
+            # other design also uses them.
+            doomed, frontier = [], [design]
+            while frontier:
+                cur = frontier.pop()
+                for el in cur.elements.exclude(child_design__isnull=True).select_related('child_design'):
+                    child = el.child_design
+                    if child.pk in {d.pk for d in doomed} or child.pk == design.pk:
+                        continue
+                    others = (DesignElement.objects.filter(child_design=child)
+                              .exclude(design__in=[design, *doomed, cur]).exists())
+                    if not others:
+                        doomed.append(child)
+                        frontier.append(child)
+            design.delete()
+            for child in doomed:  # parents before their own children
+                child.delete()
         return redirect('design-list')
 
     return redirect('design-detail', pk=design.pk)
+
+
+def _move_design_tree(request, design, new_location, user_group_ids):
+    """Move a design to `new_location` together with everything in it: its
+    sub-designs (recursively) and every inventory instance installed in any
+    of them -- all or nothing, in one transaction. A design and its
+    installed items always share a location (see inventory_update_location),
+    so moving the design alone would break that; moving the items alone is
+    refused for the same reason.
+
+    Refused (nothing changes) when: the target is blank while items are
+    installed (an item always has a location); a sub-design is also used by
+    a design outside this one's tree (it would be dragged away from that
+    parent); or the user may not edit every design / manage every instance
+    in the tree. Returns (ok, message)."""
+    def can(obj):
+        return request.user.is_superuser or (
+            bool(obj.owner_group_id) and obj.owner_group_id in user_group_ids)
+
+    tree, frontier = [design], [design]
+    while frontier:
+        cur = frontier.pop()
+        for el in cur.elements.exclude(child_design__isnull=True).select_related('child_design'):
+            child = el.child_design
+            if child.pk not in {d.pk for d in tree}:
+                tree.append(child)
+                frontier.append(child)
+    tree_ids = [d.pk for d in tree]
+
+    outside = (DesignElement.objects.filter(child_design_id__in=tree_ids[1:])
+               .exclude(design_id__in=tree_ids).select_related('design', 'child_design'))
+    for el in outside:
+        return False, (f"Sub-design {el.child_design.name} is also used by "
+                       f"{el.design.name}, so this design can't be moved without "
+                       f"separating them first.")
+
+    installs = list(
+        DesignElementInstance.objects
+        .filter(element__design_id__in=tree_ids)
+        .select_related('instance', 'instance__location')
+    )
+    if installs and new_location is None:
+        return False, ("This design has installed inventory items, which always "
+                       "need a location. Pick a location instead of None.")
+    denied = [d.name for d in tree if not can(d)]
+    denied += [i.instance.tag or str(i.instance.pk) for i in installs if not can(i.instance)]
+    if denied:
+        return False, ("You don't have permission to move everything in this design "
+                       "(" + ", ".join(denied[:5]) + (", ..." if len(denied) > 5 else "") + ").")
+
+    who = request.user.get_full_name() or request.user.username
+    moved_items = 0
+    with transaction.atomic():
+        for d in tree:
+            old = d.location
+            if old == new_location:
+                continue
+            d.location = new_location
+            d.save()
+            LogEntry.objects.create(
+                design=d, topic='design', logged_by=request.user,
+                entry=(f"Assembly location of {d.name} set to "
+                       f"{new_location or 'unassigned'}"
+                       f"{f' (was {old})' if old else ''} by {who}"
+                       f"{'' if d.pk == design.pk else f' (moved with {design.name})'}."),
+            )
+        for link in installs:
+            inst = link.instance
+            if inst.location_id == new_location.pk:
+                continue
+            old = inst.location
+            inst.location = new_location
+            inst.save()
+            LogEntry.objects.create(
+                component_instance=inst, topic='inventory', logged_by=request.user,
+                entry=(f"{inst.tag or inst.pk} moved from {old or 'unassigned'} to "
+                       f"{new_location} by {who} (moved with design {design.name})."),
+            )
+            moved_items += 1
+    parts = []
+    if len(tree) > 1:
+        parts.append(f"{len(tree) - 1} sub-design(s)")
+    if moved_items:
+        parts.append(f"{moved_items} installed item(s)")
+    return True, ("Moved along with it: " + " and ".join(parts) + "." if parts else "")
+
 
 
 @login_required
@@ -1666,7 +1818,11 @@ def design_update_location(request, pk):
     to exactly one location, and this choice constrains which inventory
     instances the placeholder-replacement dropdowns offer. Members of the
     design's owner_group (or a superuser) may set it -- 403 otherwise, same
-    pattern as the rest of the design-editing controls."""
+    pattern as the rest of the design-editing controls.
+
+    The move is for the whole design: sub-designs and every installed
+    inventory item go to the new location with it, atomically (see
+    _move_design_tree)."""
     design = get_object_or_404(Design, pk=pk)
     user_group_ids = set(request.user.groups.values_list('id', flat=True))
     can_edit = (
@@ -1685,19 +1841,11 @@ def design_update_location(request, pk):
             return redirect('design-detail', pk=design.pk)
 
         if old_location != new_location:
-            design.location = new_location
-            design.save()
-            LogEntry.objects.create(
-                design=design,
-                topic='design',
-                logged_by=request.user,
-                entry=(
-                    f"Assembly location of {design.name} set to "
-                    f"{new_location or 'unassigned'}"
-                    f"{f' (was {old_location})' if old_location else ''} by "
-                    f"{request.user.get_full_name() or request.user.username}."
-                ),
-            )
+            ok, detail = _move_design_tree(request, design, new_location, user_group_ids)
+            if not ok:
+                messages.error(request, detail)
+            elif detail:
+                messages.success(request, detail)
 
     return redirect('design-detail', pk=design.pk)
 
@@ -2364,7 +2512,7 @@ def user_inventory(request, username):
     instances = ComponentInstance.objects.filter(
         owner_user=user,
     ).select_related(
-        'component', 'technical_system',
+        'component', 'component__technical_system',
         'location', 'location__institution',
         'owner_group',
     ).order_by('component__name', 'tag')
@@ -2392,10 +2540,10 @@ def location_inventory(request, pk):
     instances = ComponentInstance.objects.filter(
         location=location,
     ).select_related(
-        'component', 'technical_system', 'owner_group', 'owner_user',
+        'component', 'component__technical_system', 'owner_group', 'owner_user',
     )
     if system:
-        instances = instances.filter(technical_system__name=system)
+        instances = instances.filter(component__technical_system__name=system)
     if group:
         instances = instances.filter(owner_group__name=group)
 
@@ -2403,7 +2551,7 @@ def location_inventory(request, pk):
     _sort_map = {
         'tag':       'tag',
         'component': 'component__name',
-        'system':    'technical_system__name',
+        'system':    'component__technical_system__name',
         'serial':    'serial_number',
         'owner':     'owner_user__username',
         'group':     'owner_group__name',

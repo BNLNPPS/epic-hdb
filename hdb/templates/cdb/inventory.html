@@ -294,7 +294,7 @@ dialog.modal::backdrop { background: rgba(20,23,34,.45); }
         </td>
         <td>{{ inst.tag|default:"—" }}</td>
         <td>{{ inst.component.name }}</td>
-        <td>{% if inst.technical_system %}<span class="tag">{{ inst.technical_system }}</span>{% else %}—{% endif %}</td>
+        <td>{% if inst.component.technical_system %}<span class="tag">{{ inst.component.technical_system }}</span>{% else %}—{% endif %}</td>
         <td><span style="font-family:monospace;font-size:12px">{{ inst.serial_number|default:"—" }}</span></td>
         <td style="font-size:12.5px">{{ inst.location|default:"—" }}</td>
         <td style="font-size:12.5px">

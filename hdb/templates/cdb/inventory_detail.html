@@ -82,10 +82,10 @@ dialog.modal::backdrop { background: rgba(20,23,34,.45); }
         <div class="field-label">Component</div>
         <div class="field-value"><a href="{% url 'component-detail' instance.component.pk %}">{{ instance.component.name }}</a></div>
       </div>
-      {% if instance.technical_system %}
+      {% if instance.component.technical_system %}
       <div class="field-group">
         <div class="field-label">System</div>
-        <div class="field-value"><span class="tag">{{ instance.technical_system }}</span></div>
+        <div class="field-value"><span class="tag">{{ instance.component.technical_system }}</span></div>
       </div>
       {% endif %}
       {% if instance.tag %}

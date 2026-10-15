@@ -506,7 +506,11 @@ class DesignClient:
         exactly which file, which exact bytes, and (best-effort) which
         git commit this load came from. Re-running this on an unchanged
         file still re-stamps them, so they always reflect the most recent
-        load, not just template creation. Use `hdb verify-template` /
+        load, not just template creation. EXCEPTION: a template that
+        already exists and whose live content disagrees with the file is
+        NOT restamped (loading doesn't change existing content, so a
+        stamp would falsely claim the database matches the file); its
+        summary has provenance_stamped=False and a "drift" dict. Use `hdb verify-template` /
         verify_templates_from_yaml() to check a tracked file's current
         content against what's actually live.
         """
@@ -526,10 +530,34 @@ class DesignClient:
         file_sha256 = _file_sha256(path)
         file_git_commit = _git_commit_for(path)
 
+        # Loading never overwrites an existing template's fields/elements
+        # (create_template is get_or_create), so a template that already
+        # disagrees with this file stays that way after the load. Stamping
+        # it with this file's hash would then make the database LOOK like
+        # it matches the file -- so templates whose existing content
+        # differs from the file are left unstamped and reported as drift.
+        pre = self.verify_templates_from_yaml(path)
+        drifted = {}
+        for rep in pre["templates"]:
+            if not rep["in_db"]:
+                continue
+            diffs = {}
+            if rep["field_diffs"]:
+                diffs["fields"] = rep["field_diffs"]
+            el_diffs = {e["element_name"]: e["field_diffs"]
+                        for e in rep["elements"] if e["field_diffs"]}
+            if el_diffs:
+                diffs["elements"] = el_diffs
+            if rep["db_only_elements"]:
+                diffs["db_only_elements"] = rep["db_only_elements"]
+            if diffs:
+                drifted[rep["name"]] = diffs
+
         results = []
         with transaction.atomic():
             for doc in docs:
                 tpl = doc["template"]
+                has_drift = tpl["name"] in drifted
                 results.append(self.create_template(
                     name=tpl["name"],
                     project=tpl.get("project", "ePIC"),
@@ -538,10 +566,13 @@ class DesignClient:
                     owner_username=tpl.get("owner_user"),
                     product_component=tpl.get("product_component"),
                     elements=doc.get("elements", []),
-                    source_path=file_source_path,
+                    source_path=None if has_drift else file_source_path,
                     source_sha256=file_sha256,
                     source_git_commit=file_git_commit,
                 ))
+                results[-1]["provenance_stamped"] = not has_drift
+                if has_drift:
+                    results[-1]["drift"] = drifted[tpl["name"]]
         resolution = results[-1]["resolution"] if results else {"resolved": [], "conflicts": []}
         return {"templates": results, "resolution": resolution}
 

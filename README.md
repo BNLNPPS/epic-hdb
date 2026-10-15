@@ -697,15 +697,20 @@ explicitly documented as such in `client/README.md`.
 
 ## Note for testers/developers
 
-To completely reset the database, use these commands:
+To completely reset the **local SQLite development** database, use these
+commands. Do **not** delete `hdb/migrations/` -- the migrations are tracked
+in git and are what production (Postgres) is upgraded with; regenerating
+them locally produces a history that no longer matches the deployed one.
 ```bash
 # from your project root (where manage.py lives)
 rm -f db.sqlite3
-rm -rf hdb/migrations
-python manage.py makemigrations hdb
 python manage.py migrate
 python manage.py seed_hdb
 ```
+
+`seed_hdb` creates accounts whose password equals the username, so it
+refuses to run against anything but SQLite unless you pass
+`--i-know-this-is-not-production`.
 
 ---
 

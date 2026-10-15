@@ -50,7 +50,7 @@ dialog.modal::backdrop { background: rgba(20,23,34,.45); }
     </div>
   </div>
   {% if can_edit_elements %}
-  <form method="post" action="{% url 'design-delete' design.pk %}" style="margin:0" onsubmit="return confirm('Are you sure you want to delete the design \'{{ design.name|escapejs }}\'? Its bill of materials, installed-instance assignments, properties and log entries will be removed. This cannot be undone.')">
+  <form method="post" action="{% url 'design-delete' design.pk %}" style="margin:0" onsubmit="return confirm('Are you sure you want to delete the design \'{{ design.name|escapejs }}\'? Its bill of materials, installed-instance assignments, properties and log entries will be removed, along with any sub-designs used only by this design. This cannot be undone.')">
     {% csrf_token %}
     <button type="submit" class="btn btn-ghost" style="color:#b91c1c;border-color:#fecaca">Delete Design</button>
   </form>
@@ -87,6 +87,7 @@ dialog.modal::backdrop { background: rgba(20,23,34,.45); }
           </select>
           <button type="submit" class="btn btn-ghost" style="font-size:12.5px;padding:5px 10px">Save</button>
         </form>
+        <span style="font-size:11.5px;color:var(--muted)">Sub-designs and installed items move with the design.</span>
       </div>
       {% elif design.location %}
       <div style="font-size:12.5px;color:var(--muted);margin:8px 0 12px">Assembly Location: <strong>{{ design.location.full_path }}</strong></div>

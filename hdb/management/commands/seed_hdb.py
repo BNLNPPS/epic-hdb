@@ -26,7 +26,7 @@ from datetime import datetime, time as dt_time
 from django.conf import settings
 from django.contrib.auth.models import User, Group
 from django.core.files import File
-from django.core.management.base import BaseCommand
+from django.core.management.base import BaseCommand, CommandError
 from django.utils import timezone
 from hdb.models import (
     Institution, Location, TechnicalSystem, Component, ComponentInstance,
@@ -53,7 +53,23 @@ from hdb_client import HDBClient  # noqa: E402  (must follow the sys.path insert
 class Command(BaseCommand):
     help = "Seed the HDB with the BEMC/BTOF sample dataset"
 
+    def add_arguments(self, parser):
+        parser.add_argument(
+            "--i-know-this-is-not-production", action="store_true",
+            dest="force_non_sqlite",
+            help="Allow seeding a non-SQLite database. The seed accounts use "
+                 "their username as password; never use this on production.",
+        )
+
     def handle(self, *args, **options):
+        from django.db import connection
+        if connection.vendor != "sqlite" and not options["force_non_sqlite"]:
+            raise CommandError(
+                "seed_hdb creates accounts with password == username and "
+                "is for local SQLite development only; the configured "
+                f"database is {connection.vendor}. Re-run with "
+                "--i-know-this-is-not-production if you really mean it."
+            )
         self.stdout.write("Seeding HDB …")
 
         # Groups
