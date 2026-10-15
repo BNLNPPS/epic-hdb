@@ -1,0 +1,28 @@
+{% extends "cdb/base.html" %}
+{% block title %}Groups -- ePIC Hardware{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>Groups</h1>
+    <div class="page-subtitle">Click on a group to see its details.</div>
+  </div>
+</div>
+
+{% if groups %}
+<div class="stats-grid" style="grid-template-columns:repeat(auto-fill,minmax(200px,1fr))">
+  {% for g in groups %}
+  <a href="{% url 'group-page-detail' g.name %}" class="stat-card">
+    <div class="label">Group</div>
+    <div class="value" style="font-size:22px;line-height:1.2;overflow-wrap:anywhere">{{ g.name }}</div>
+    <div class="sub">{{ g.member_count }} member{{ g.member_count|pluralize }}</div>
+    <div class="sub">{{ g.item_count }} inventory item{{ g.item_count|pluralize }}</div>
+    <div class="sub">{{ g.design_count }} design{{ g.design_count|pluralize }}</div>
+    <div class="sub">{{ g.location_count }} location{{ g.location_count|pluralize }}</div>
+  </a>
+  {% endfor %}
+</div>
+{% else %}
+<div class="empty">No groups yet</div>
+{% endif %}
+{% endblock %}
