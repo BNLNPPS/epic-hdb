@@ -72,7 +72,7 @@ dialog.modal::backdrop { background: rgba(20,23,34,.45); }
       </div>
     </div>
     {% with loc_count=inst.leaf_location_count %}
-    <div style="color:var(--muted);font-size:12px">{{ loc_count }} location{{ loc_count|pluralize }}</div>
+    <div style="color:var(--muted);font-size:12px">{{ loc_count }} location{{ loc_count|pluralize }}, {{ inst.item_count }} item{{ inst.item_count|pluralize }}, {{ inst.design_count }} design{{ inst.design_count|pluralize }}</div>
     {% endwith %}
   </div>
 

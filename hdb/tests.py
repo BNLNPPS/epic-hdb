@@ -371,7 +371,7 @@ class InstitutionLeafLocationCount(Base):
         # L1, L2, R1, R2 are leaves -- buildings B and B1 have children, so are not counted
         self.assertEqual(inst.leaf_location_count, 4)
         self.assertEqual(inst.locations.count(), 6)
-        self.assertContains(r, "4 locations<")
+        self.assertContains(r, "4 locations, 0 items, 0 designs<")
 
     def test_count_singular_and_building_without_rooms_counts(self):
         inst2 = Institution.objects.create(name="Solo")
@@ -379,7 +379,7 @@ class InstitutionLeafLocationCount(Base):
         r = self.client.get(reverse("institution-list"))
         solo = [i for i in r.context["institutions"] if i.pk == inst2.pk][0]
         self.assertEqual(solo.leaf_location_count, 1)
-        self.assertContains(r, "1 location<")
+        self.assertContains(r, "1 location, 0 items, 0 designs<")
 
 
 class LocationHierarchy(Base):
@@ -464,3 +464,17 @@ class LocationHierarchy(Base):
         Location.objects.filter(pk=bad.pk).update(location_type="shelf")
         with self.assertRaises(CommandError):
             call_command("check_locations", stdout=io.StringIO())
+
+    def test_header_shows_items_and_designs_at_the_institution(self):
+        other = Institution.objects.create(name="CERN")
+        ob = Location.objects.create(name="OB", location_type="building", institution=other)
+        orm = Location.objects.create(name="OR", parent=ob, institution=other)
+        self.instance("a"); self.instance("b", location=self.l2)
+        ComponentInstance.objects.create(component=self.comp, tag="far", location=orm)
+        self.design("D1"); self.design("D2", location=self.l2); self.design("D3", location=orm)
+        r = self.client.get(reverse("institution-list"))
+        by = {i.name: i for i in r.context["institutions"]}
+        self.assertEqual((by["BNL"].item_count, by["BNL"].design_count), (2, 2))
+        self.assertEqual((by["CERN"].item_count, by["CERN"].design_count), (1, 1))
+        self.assertContains(r, "2 locations, 2 items, 2 designs<")
+        self.assertContains(r, "1 location, 1 item, 1 design<")

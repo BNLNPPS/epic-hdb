@@ -2430,7 +2430,15 @@ def institution_list(request):
         entry = tally.setdefault(inst_id, {}).setdefault(gid, [gname, 0])
         entry[1] += 1
     institutions = list(institutions)
+    # Inventory items / designs located at each institution (via their
+    # Location's institution), as grouped counts.
+    item_counts = dict(ComponentInstance.objects.filter(location__isnull=False)
+                       .values_list('location__institution_id').annotate(n=Count('pk')))
+    design_counts = dict(Design.objects.filter(location__isnull=False)
+                         .values_list('location__institution_id').annotate(n=Count('pk')))
     for inst in institutions:
+        inst.item_count = item_counts.get(inst.pk, 0)
+        inst.design_count = design_counts.get(inst.pk, 0)
         # Leaf locations only: a Building that contains Rooms is not
         # counted on top of those Rooms (parent_ids = locations that have
         # at least one child).
