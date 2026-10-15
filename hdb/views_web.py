@@ -2312,6 +2312,57 @@ def system_detail(request, pk):
 # ── Users ─────────────────────────────────────────────────────────────────────
 
 @login_required
+def group_list(request):
+    """Tile overview of all groups (Django auth Groups), each linking to
+    its group detail page. Member counts exclude the built-in "admin"
+    account, same as the Users list. Also tallies each group's inventory
+    items, designs, and locations in use."""
+    groups = Group.objects.annotate(
+        member_count=Count('user', filter=~Q(user__username='admin'), distinct=True),
+    ).order_by('name')
+    # Group ownership lives on OwnedModel.owner_group (related_name="+", so
+    # no reverse accessor) -- tally per group with grouped queries instead.
+    items = dict(ComponentInstance.objects.filter(owner_group__isnull=False)
+                 .values_list('owner_group_id').annotate(n=Count('pk')))
+    designs = dict(Design.objects.filter(owner_group__isnull=False)
+                   .values_list('owner_group_id').annotate(n=Count('pk')))
+    # Location has no owner of its own: a group's locations are the ones
+    # where its inventory is stored or its designs are being assembled.
+    loc_sets = {}
+    for gid, loc in (ComponentInstance.objects.filter(owner_group__isnull=False, location__isnull=False)
+                     .values_list('owner_group_id', 'location_id').distinct()):
+        loc_sets.setdefault(gid, set()).add(loc)
+    for gid, loc in (Design.objects.filter(owner_group__isnull=False, location__isnull=False)
+                     .values_list('owner_group_id', 'location_id').distinct()):
+        loc_sets.setdefault(gid, set()).add(loc)
+    groups = list(groups)
+    for g in groups:
+        g.item_count = items.get(g.pk, 0)
+        g.design_count = designs.get(g.pk, 0)
+        g.location_count = len(loc_sets.get(g.pk, ()))
+    return render(request, 'cdb/groups.html', {
+        'groups': groups,
+        'active_page': 'groups',
+    })
+
+
+@login_required
+def group_detail(request, name):
+    """Group detail page, addressed by the (unique) group name: the
+    group's members with their institutions, each linking to that user's
+    page. The built-in "admin" account is left out, as on the Users list."""
+    group = get_object_or_404(Group, name=name)
+    members = (User.objects.filter(groups=group).exclude(username='admin')
+               .select_related('profile__institution')
+               .order_by('last_name', 'first_name', 'username'))
+    return render(request, 'cdb/group_detail.html', {
+        'group': group,
+        'members': members,
+        'active_page': 'groups',
+    })
+
+
+@login_required
 def user_list(request):
     """List all site users (excluding the built-in "admin" account) with
     their name, home institution, and email. Optionally filtered down to

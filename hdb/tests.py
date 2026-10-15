@@ -247,3 +247,60 @@ class YamlProvenance(Base):
         # a clean reload of the original content still restamps
         third = c.designs.load_templates_from_yaml(self._write(4))
         self.assertTrue(third["templates"][0]["provenance_stamped"])
+
+
+class GroupPages(Base):
+    def test_nav_has_separate_users_and_groups_links(self):
+        r = self.client.get(reverse("user-list"))
+        self.assertContains(r, 'href="%s"' % reverse("user-list"))
+        self.assertContains(r, 'href="%s"' % reverse("group-page-list"))
+        self.assertNotContains(r, "Users &amp; Groups")
+
+    def test_group_list_shows_tiles_linking_to_detail(self):
+        r = self.client.get(reverse("group-page-list"))
+        self.assertEqual(r.status_code, 200)
+        self.assertContains(r, reverse("group-page-detail", args=[self.group.name]))
+        self.assertContains(r, ">G<")
+        self.assertContains(r, "1 member<")
+
+    def test_group_detail_shows_title(self):
+        r = self.client.get(reverse("group-page-detail", args=[self.group.name]))
+        self.assertContains(r, "<h1>G</h1>", html=True)
+        self.assertEqual(self.client.get(reverse("group-page-detail", args=["nope"])).status_code, 404)
+
+    def test_group_pages_require_login(self):
+        self.client.logout()
+        for url in (reverse("group-page-list"), reverse("group-page-detail", args=[self.group.name])):
+            self.assertEqual(self.client.get(url).status_code, 302)
+
+    def test_group_tile_tallies(self):
+        l3 = Location.objects.create(name="L3", institution=self.inst)
+        self.instance("a"); self.instance("b", location=self.l2)
+        self.design("D1", location=self.l2); self.design("D2", location=l3)
+        ComponentInstance.objects.create(component=self.comp, tag="x", location=self.l1)  # no group
+        r = self.client.get(reverse("group-page-list"))
+        tile = [g for g in r.context["groups"] if g.pk == self.group.pk][0]
+        self.assertEqual((tile.item_count, tile.design_count, tile.location_count), (2, 2, 3))
+        self.assertContains(r, "2 inventory items<")
+        self.assertContains(r, "2 designs<")
+        self.assertContains(r, "3 locations<")
+
+    def test_group_detail_url_uses_name_and_lists_members(self):
+        self.assertEqual(reverse("group-page-detail", args=["G"]), "/groups/G/")
+        inst = Institution.objects.create(name="Argonne", abbreviation="ANL")
+        from .models import UserProfile
+        self.user.first_name, self.user.last_name = "Ann", "Lee"
+        self.user.save()
+        UserProfile.objects.create(user=self.user, institution=inst)
+        outsider = User.objects.create_user("outsider")
+        r = self.client.get(reverse("group-page-detail", args=["G"]))
+        self.assertContains(r, "Ann Lee")
+        self.assertContains(r, "ANL")
+        self.assertContains(r, reverse("user-inventory", args=["u"]))
+        self.assertNotContains(r, outsider.username)
+
+    def test_group_name_with_space_and_slash_resolves(self):
+        g = Group.objects.create(name="Sim / Reco team")
+        url = reverse("group-page-detail", args=[g.name])
+        self.assertEqual(self.client.get(url).status_code, 200)
+        self.assertContains(self.client.get(reverse("group-page-list")), url)

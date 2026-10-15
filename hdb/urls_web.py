@@ -69,6 +69,8 @@ urlpatterns = [
     path("logs/",                     views_web.log_list,         name="log-list"),
     path("users/",                    views_web.user_list,        name="user-list"),
     path("users/<str:username>/inventory/", views_web.user_inventory,  name="user-inventory"),
+    path("groups/",                   views_web.group_list,       name="group-page-list"),
+    path("groups/<path:name>/",       views_web.group_detail,     name="group-page-detail"),
     path("locations/<str:pk>/inventory/",   views_web.location_inventory, name="location-inventory"),
     path("locations/<str:pk>/update-parent/",
                                        views_web.location_update_parent, name="location-update-parent"),
