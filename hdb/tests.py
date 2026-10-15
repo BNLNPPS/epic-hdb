@@ -508,3 +508,51 @@ class DesignListLocationColumn(Base):
         self.assertLess(html.index(">B / L1</a>"), html.index(">B / L1 / Cab</a>"))
         self.assertLess(html.index(">B / L1 / Cab / Shelf3</a>"), html.index(">B / L2</a>"))
         self.assertNotContains(r, "&rarr; B<")
+
+
+class UserPage(Base):
+    def test_users_list_note(self):
+        r = self.client.get(reverse("user-list"))
+        self.assertContains(r, "Click on a table row to see information about the user.")
+        self.assertNotContains(r, "inventory owned by the user")
+
+    def test_user_page_layout(self):
+        from .models import UserProfile
+        inst = Institution.objects.create(name="Argonne National Lab", abbreviation="ANL")
+        self.user.first_name, self.user.last_name = "Ann", "Lee"; self.user.save()
+        self.user.groups.add(Group.objects.create(name="Second"))
+        UserProfile.objects.create(user=self.user, institution=inst)
+        self.instance("mine")
+        html = self.client.get(reverse("user-inventory", args=["u"])).content.decode()
+        self.assertIn("<h1>Ann Lee</h1>", html)
+        self.assertNotIn("Inventory: Ann", html)
+        i_inst, i_groups = html.index("Argonne National Lab"), html.index("Groups:")
+        i_title, i_table = html.index(">Inventory owned</h2>"), html.index("<table")
+        self.assertTrue(html.index("<h1>") < i_inst < i_groups < i_title < i_table)
+        self.assertIn(reverse("group-page-detail", args=["G"]), html)
+        self.assertIn(reverse("group-page-detail", args=["Second"]), html)
+        self.assertIn("mine", html)
+
+    def test_user_without_profile_or_groups(self):
+        bare = User.objects.create_user("bare")
+        html = self.client.get(reverse("user-inventory", args=["bare"])).content.decode()
+        self.assertIn("<h1>bare</h1>", html)
+        self.assertIn("No institution", html)
+
+    def test_users_table_starts_with_username_column(self):
+        html = self.client.get(reverse("user-list")).content.decode()
+        head = html[html.index("<thead>"):html.index("</thead>")]
+        self.assertLess(head.index("Username"), head.index("First Name"))
+        self.assertIn('<td><code class="mono-code">u</code></td>', html)
+
+    def test_user_page_shows_email_in_parentheses_after_name_when_present(self):
+        self.user.first_name, self.user.last_name, self.user.email = "Ann", "Lee", "ann@example.org"
+        self.user.save()
+        html = self.client.get(reverse("user-inventory", args=["u"])).content.decode()
+        h1 = html[html.index("<h1>"):html.index("</h1>")]
+        self.assertTrue(h1.startswith("<h1>Ann Lee"))
+        self.assertIn("(ann@example.org)", h1)
+        self.user.email = ""; self.user.save()
+        html = self.client.get(reverse("user-inventory", args=["u"])).content.decode()
+        self.assertIn("<h1>Ann Lee</h1>", html)
+        self.assertNotIn("()", html)

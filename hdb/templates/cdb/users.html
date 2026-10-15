@@ -12,7 +12,7 @@
 <div class="page-header">
   <div>
     <h1>Users</h1>
-    <div class="page-subtitle">Click on a table row to see the inventory owned by the user.</div>
+    <div class="page-subtitle">Click on a table row to see information about the user.</div>
   </div>
 </div>
 
@@ -40,6 +40,7 @@
   <table>
     <thead>
       <tr>
+        <th>Username</th>
         <th>First Name</th>
         {% with col="last_name" label="Last Name" %}
         <th class="th-sort">
@@ -62,6 +63,7 @@
     <tbody>
       {% for u in users %}
       <tr class="clickable" onclick="location.href='{% url 'user-inventory' u.username %}'">
+        <td><code class="mono-code">{{ u.username }}</code></td>
         <td>{{ u.first_name|default:"—" }}</td>
         <td>{{ u.last_name|default:"—" }}</td>
         <td>{% if u.profile.institution %}<span class="tag">{{ u.profile.institution }}</span>{% else %}—{% endif %}</td>
@@ -72,7 +74,7 @@
         <td>{{ u.email|default:"—" }}</td>
       </tr>
       {% empty %}
-      <tr><td colspan="5"><div class="empty">No users found</div></td></tr>
+      <tr><td colspan="6"><div class="empty">No users found</div></td></tr>
       {% endfor %}
     </tbody>
   </table>
