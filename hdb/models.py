@@ -84,7 +84,56 @@ class Location(models.Model):
     def save(self, *args, **kwargs):
         if not self.id:
             self.id = str(uuid.uuid4())
+        self.validate_hierarchy()
         super().save(*args, **kwargs)
+
+    # Required type of the parent for each hierarchical location type:
+    # building (top level) > room > cabinet > shelf. "other" is the
+    # escape hatch: no constraints on it (optional parent, of any type).
+    PARENT_TYPE = {"room": "building", "cabinet": "room", "shelf": "cabinet"}
+
+    def validate_hierarchy(self):
+        """Enforce the building > room > cabinet > shelf hierarchy.
+
+        - a building has no parent (it is top level);
+        - a room's parent must be a building, a cabinet's a room, a
+          shelf's a cabinet -- and the parent is mandatory;
+        - the parent must be in the same institution;
+        - "other" locations are unconstrained;
+        - changing a location's type or parent must not leave any of its
+          existing children with the wrong kind of parent.
+        Raises django.core.exceptions.ValidationError."""
+        from django.core.exceptions import ValidationError
+        required = self.PARENT_TYPE.get(self.location_type)
+        parent = self.parent if self.parent_id else None
+        label = dict(self.LOCATION_TYPES).get(self.location_type, self.location_type)
+        if self.location_type == "building" and parent is not None:
+            raise ValidationError("A building is top level and cannot have a parent location.")
+        if required:
+            if parent is None:
+                raise ValidationError(f"A {label.lower()} must belong to a {required}: choose a parent {required}.")
+            if parent.location_type != required:
+                raise ValidationError(
+                    f"The parent of a {label.lower()} must be a {required}, "
+                    f"but {parent.name!r} is a {parent.location_type}.")
+        if parent is not None:
+            if self.pk and parent.pk == self.pk:
+                raise ValidationError("A location cannot be its own parent.")
+            if self.institution_id and parent.institution_id != self.institution_id:
+                raise ValidationError("The parent location must be in the same institution.")
+        if self.pk and not self._state.adding:
+            for child in type(self).objects.filter(parent_id=self.pk):
+                need = self.PARENT_TYPE.get(child.location_type)
+                if need and need != self.location_type:
+                    raise ValidationError(
+                        f"{child.name!r} ({child.location_type}) is inside this location and "
+                        f"needs a {need} as its parent; move or retype it first.")
+                if self.institution_id and child.institution_id != self.institution_id:
+                    raise ValidationError(f"{child.name!r} is in a different institution.")
+
+    def clean(self):
+        super().clean()
+        self.validate_hierarchy()
 
     def full_path(self):
         """Return slash-separated path: Institution / Building / Room / …

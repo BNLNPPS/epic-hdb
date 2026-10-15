@@ -117,7 +117,7 @@ client.locations.users_at_institution("BNL")             # UserProfile queryset
 client.locations.all_locations()
 client.locations.locations_at_institution("CUA")
 client.locations.buildings(institution_abbr="BNL")
-client.locations.rooms_in_building("Bldg,510A")
+client.locations.rooms_in_building("Bldg.510A")
 
 client.locations.location_tree("CUA")
 # -> [{"id": ..., "name": "Storage Room", "type": "room", "children": []}]

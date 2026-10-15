@@ -166,14 +166,23 @@ class Command(BaseCommand):
                       "url": "https://www.hawaii.edu"},
         )
 
+        # Rooms must sit in a building (see Location.validate_hierarchy).
+        cua_bldg, _ = Location.objects.get_or_create(
+            name="Main Building", location_type="building", institution=cua,
+        )
+        uic_bldg, _ = Location.objects.get_or_create(
+            name="Main Building", location_type="building", institution=uic,
+        )
         storage_room, _ = Location.objects.get_or_create(
             name="Storage Room", location_type="room", institution=cua,
+            defaults={"parent": cua_bldg},
         )
         test_lab, _ = Location.objects.get_or_create(
             name="Test Lab", location_type="room", institution=uic,
+            defaults={"parent": uic_bldg},
         )
         bldg_510a, _ = Location.objects.get_or_create(
-            name="Bldg,510A", location_type="building", institution=bnl,
+            name="Bldg.510A", location_type="building", institution=bnl,
         )
 
         # Link each user to their home institution.

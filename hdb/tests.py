@@ -22,8 +22,9 @@ class Base(TestCase):
         cls.user = User.objects.create_user("u", password="x")
         cls.user.groups.add(cls.group)
         cls.inst = Institution.objects.create(name="BNL")
-        cls.l1 = Location.objects.create(name="L1", institution=cls.inst)
-        cls.l2 = Location.objects.create(name="L2", institution=cls.inst)
+        cls.bldg = Location.objects.create(name="B", location_type="building", institution=cls.inst)
+        cls.l1 = Location.objects.create(name="L1", institution=cls.inst, parent=cls.bldg)
+        cls.l2 = Location.objects.create(name="L2", institution=cls.inst, parent=cls.bldg)
         cls.ts1 = TechnicalSystem.objects.create(name="TS1")
         cls.ts2 = TechnicalSystem.objects.create(name="TS2")
         cls.comp = Component.objects.create(name="C", technical_system=cls.ts1,
@@ -207,7 +208,8 @@ class ClientCreateDisambiguation(Base):
         sys.path.insert(0, str(settings.BASE_DIR / "client"))
         from hdb_client import HDBClient
         other = Institution.objects.create(name="CERN")
-        Location.objects.create(name="L1", institution=other)
+        ob = Location.objects.create(name="OB", location_type="building", institution=other)
+        Location.objects.create(name="L1", institution=other, parent=ob)
         c = HDBClient(user=self.user)
         with self.assertRaises(ValueError):
             c.inventory.create(component_name="C", location_name="L1")
@@ -274,7 +276,7 @@ class GroupPages(Base):
             self.assertEqual(self.client.get(url).status_code, 302)
 
     def test_group_tile_tallies(self):
-        l3 = Location.objects.create(name="L3", institution=self.inst)
+        l3 = Location.objects.create(name="L3", institution=self.inst, parent=self.bldg)
         self.instance("a"); self.instance("b", location=self.l2)
         self.design("D1", location=self.l2); self.design("D2", location=l3)
         ComponentInstance.objects.create(component=self.comp, tag="x", location=self.l1)  # no group
@@ -304,3 +306,161 @@ class GroupPages(Base):
         url = reverse("group-page-detail", args=[g.name])
         self.assertEqual(self.client.get(url).status_code, 200)
         self.assertContains(self.client.get(reverse("group-page-list")), url)
+
+
+class InstitutionGroupsSection(Base):
+    def test_groups_section_lists_groups_of_the_institutions_users(self):
+        from .models import UserProfile
+        other_inst = Institution.objects.create(name="CERN")
+        g2 = Group.objects.create(name="Other / Team")
+        lone = Group.objects.create(name="Elsewhere")
+        u2 = User.objects.create_user("u2"); u2.groups.add(self.group, g2)
+        u3 = User.objects.create_user("u3"); u3.groups.add(lone)
+        admin = User.objects.create_user("admin"); admin.groups.add(Group.objects.create(name="AdminOnly"))
+        UserProfile.objects.create(user=self.user, institution=self.inst)
+        UserProfile.objects.create(user=u2, institution=self.inst)
+        UserProfile.objects.create(user=u3, institution=other_inst)
+        UserProfile.objects.create(user=admin, institution=self.inst)
+        r = self.client.get(reverse("institution-list"))
+        by_name = {i.name: i for i in r.context["institutions"]}
+        self.assertEqual(
+            [(g["name"], g["user_count"]) for g in by_name["BNL"].group_summaries],
+            [("G", 2), ("Other / Team", 1)])
+        self.assertEqual([g["name"] for g in by_name["CERN"].group_summaries], ["Elsewhere"])
+        self.assertContains(r, reverse("group-page-detail", args=["Other / Team"]))
+        self.assertNotIn("AdminOnly", [g["name"] for i in r.context["institutions"] for g in i.group_summaries])
+        self.assertContains(r, "2 users here")
+
+    def test_user_rows_are_table_columns_name_groups_owned_items(self):
+        from .models import UserProfile
+        g2 = Group.objects.create(name="Second")
+        self.user.groups.add(g2)
+        UserProfile.objects.create(user=self.user, institution=self.inst)
+        loner = User.objects.create_user("loner")
+        UserProfile.objects.create(user=loner, institution=self.inst)
+        html = self.client.get(reverse("institution-list")).content.decode()
+        self.assertIn('<table class="inst-users">', html)
+        rows = [r for r in html.split("<tr>")[1:] if "iu-name" in r]
+        by_user = {("u" if "u: view owned items" in r else "loner"): r for r in rows}
+        r = by_user["u"]
+        self.assertLess(r.index("iu-name"), r.index("iu-groups"))
+        self.assertLess(r.index("iu-groups"), r.index("iu-items"))
+        self.assertIn(reverse("group-page-detail", args=["G"]), r)
+        self.assertIn(reverse("group-page-detail", args=["Second"]), r)
+        self.assertIn("&mdash;", by_user["loner"].split("iu-groups")[1].split("iu-items")[0])
+        self.assertIn("loner: view owned items", by_user["loner"])
+
+    def test_groups_section_is_one_comma_separated_line(self):
+        from .models import UserProfile
+        g2 = Group.objects.create(name="Second")
+        self.user.groups.add(g2)
+        UserProfile.objects.create(user=self.user, institution=self.inst)
+        html = self.client.get(reverse("institution-list")).content.decode()
+        sect = html[html.index(">Groups</div>"):html.index('class="inst-users"')]
+        self.assertEqual(sect.count('class="loc-row"'), 1)
+        self.assertIn("(1 user here)</span>,</span>", sect)
+
+
+class InstitutionLeafLocationCount(Base):
+    def test_count_includes_only_leaf_locations(self):
+        bldg = Location.objects.create(name="B1", location_type="building", institution=self.inst)
+        Location.objects.create(name="R1", parent=bldg, institution=self.inst)
+        Location.objects.create(name="R2", parent=bldg, institution=self.inst)
+        r = self.client.get(reverse("institution-list"))
+        inst = [i for i in r.context["institutions"] if i.pk == self.inst.pk][0]
+        # L1, L2, R1, R2 are leaves -- buildings B and B1 have children, so are not counted
+        self.assertEqual(inst.leaf_location_count, 4)
+        self.assertEqual(inst.locations.count(), 6)
+        self.assertContains(r, "4 locations<")
+
+    def test_count_singular_and_building_without_rooms_counts(self):
+        inst2 = Institution.objects.create(name="Solo")
+        Location.objects.create(name="Hall", location_type="building", institution=inst2)
+        r = self.client.get(reverse("institution-list"))
+        solo = [i for i in r.context["institutions"] if i.pk == inst2.pk][0]
+        self.assertEqual(solo.leaf_location_count, 1)
+        self.assertContains(r, "1 location<")
+
+
+class LocationHierarchy(Base):
+    def make(self, **kw):
+        kw.setdefault("institution", self.inst)
+        return Location.objects.create(**kw)
+
+    def test_room_needs_a_building_parent(self):
+        from django.core.exceptions import ValidationError
+        with self.assertRaises(ValidationError):
+            self.make(name="Orphan room", location_type="room")
+        with self.assertRaises(ValidationError):  # room under a room
+            self.make(name="R", location_type="room", parent=self.l1)
+        self.make(name="Ok room", location_type="room", parent=self.bldg)
+
+    def test_cabinet_needs_room_and_shelf_needs_cabinet(self):
+        from django.core.exceptions import ValidationError
+        with self.assertRaises(ValidationError):
+            self.make(name="C", location_type="cabinet")
+        with self.assertRaises(ValidationError):  # cabinet straight in a building
+            self.make(name="C", location_type="cabinet", parent=self.bldg)
+        cab = self.make(name="C", location_type="cabinet", parent=self.l1)
+        with self.assertRaises(ValidationError):
+            self.make(name="S", location_type="shelf")
+        with self.assertRaises(ValidationError):  # shelf in a room
+            self.make(name="S", location_type="shelf", parent=self.l1)
+        self.make(name="S", location_type="shelf", parent=cab)
+
+    def test_building_is_top_level_and_other_is_free(self):
+        from django.core.exceptions import ValidationError
+        with self.assertRaises(ValidationError):
+            self.make(name="B2", location_type="building", parent=self.bldg)
+        self.make(name="Truck", location_type="other")
+        self.make(name="Box", location_type="other", parent=self.l1)
+
+    def test_parent_must_be_in_same_institution(self):
+        from django.core.exceptions import ValidationError
+        other = Institution.objects.create(name="CERN")
+        with self.assertRaises(ValidationError):
+            self.make(name="R", location_type="room", parent=self.bldg, institution=other)
+
+    def test_cannot_retype_or_reparent_so_children_become_invalid(self):
+        from django.core.exceptions import ValidationError
+        self.bldg.location_type = "other"
+        with self.assertRaises(ValidationError):
+            self.bldg.save()           # rooms L1/L2 still need a building
+        self.l1.parent = None
+        with self.assertRaises(ValidationError):
+            self.l1.save()
+
+    def test_create_view_rejects_violations_and_reports_reason(self):
+        su = User.objects.create_superuser("root", password="x")
+        self.client.force_login(su)
+        url = reverse("location-create", args=[self.inst.pk])
+        r = self.client.post(url, {"name": "Lonely", "location_type": "room"}, follow=True)
+        self.assertFalse(Location.objects.filter(name="Lonely").exists())
+        self.assertContains(r, "must belong to a building")
+        self.client.post(url, {"name": "Good", "location_type": "room", "parent": self.bldg.pk})
+        self.assertTrue(Location.objects.filter(name="Good", parent=self.bldg).exists())
+        self.client.post(url, {"name": "Tower", "location_type": "building"})
+        self.assertTrue(Location.objects.filter(name="Tower", parent=None).exists())
+
+    def test_update_parent_view_repairs_legacy_orphan_and_never_clears(self):
+        su = User.objects.create_superuser("root", password="x")
+        self.client.force_login(su)
+        orphan = self.make(name="Legacy", location_type="other")
+        Location.objects.filter(pk=orphan.pk).update(location_type="room")   # simulate legacy row
+        url = reverse("location-update-parent", args=[orphan.pk])
+        self.client.post(url, {"parent": self.l1.pk})        # wrong type -> no-op
+        orphan.refresh_from_db(); self.assertIsNone(orphan.parent_id)
+        self.client.post(url, {"parent": self.bldg.pk})
+        orphan.refresh_from_db(); self.assertEqual(orphan.parent_id, self.bldg.pk)
+        self.client.post(url, {"parent": ""})                # blank must not clear
+        orphan.refresh_from_db(); self.assertEqual(orphan.parent_id, self.bldg.pk)
+
+    def test_check_locations_command_flags_legacy_rows(self):
+        from django.core.management.base import CommandError
+        out = io.StringIO()
+        call_command("check_locations", stdout=out)
+        self.assertIn("satisfy", out.getvalue())
+        bad = self.make(name="Legacy", location_type="other")
+        Location.objects.filter(pk=bad.pk).update(location_type="shelf")
+        with self.assertRaises(CommandError):
+            call_command("check_locations", stdout=io.StringIO())

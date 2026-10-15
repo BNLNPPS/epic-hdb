@@ -176,7 +176,7 @@ in a self-referential hierarchy: Building → Room → Cabinet → Shelf → Oth
 | `parent` | FK to parent Location (self-referential) |
 
 `Location.full_path()` (used by `__str__`) returns the full slash-separated
-path, e.g.: `BNL / Bldg,510A`.
+path, e.g.: `BNL / Bldg.510A`.
 
 Every `User` also has a **`UserProfile`** with a mandatory `institution` FK —
 a user's home institution, used to group "who's at which site" (e.g. the
@@ -591,7 +591,7 @@ approximate):
 | Object | Count | Examples |
 |--------|-------|---------|
 | Institutions | 4 | BNL, CUA, UIC, UH (University of Hawaii) |
-| Locations | 3 | Storage Room (CUA), Test Lab (UIC), Bldg,510A (BNL) |
+| Locations | 5 | Main Building (CUA, UIC) with Storage Room (CUA) and Test Lab (UIC), Bldg.510A (BNL) |
 | Groups | 3 | BEMC, BTOF, PFRICH |
 | Users | 8 | `admin`, `maxim` (superusers); `crafts` (BEMC), `gnigmat` (BTOF), `ottjenni` (BTOF), `ullrich` (BEMC+BTOF), `bpage` (PFRICH), `ayk` (PFRICH) |
 | Technical Systems | 5 | BEMC-CRYSTAL, BEMC-PM, BTOF-Sensor, BTOF-Readout, PFRICH-HRPPD |

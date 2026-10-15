@@ -3,6 +3,21 @@
 
 {% block content %}
 <style>
+table.inst-users { width: 100%; border-collapse: collapse; font-size: 12.5px; background: none; }
+table.inst-users th {
+  text-align: left; font-size: 10.5px; font-weight: 600; color: var(--muted);
+  text-transform: uppercase; letter-spacing: .05em; padding: 2px 10px 4px;
+  background: none; border-bottom: 1px solid var(--border);
+}
+table.inst-users td { padding: 5px 10px; border-bottom: none; vertical-align: baseline; }
+table.inst-users tbody tr:hover { background: #f5f7ff; }
+table.inst-users td.iu-name { white-space: nowrap; width: 28%; }
+table.inst-users td.iu-groups { width: 42%; color: var(--muted); }
+table.inst-users td.iu-items { white-space: nowrap; }
+table.inst-users td a { display: inline; color: var(--accent); text-decoration: none; }
+table.inst-users td a:hover { text-decoration: underline; }
+</style>
+<style>
 dialog.modal {
   border: none; border-radius: 12px; padding: 0;
   box-shadow: 0 10px 40px rgba(30,34,48,.18);
@@ -56,23 +71,38 @@ dialog.modal::backdrop { background: rgba(20,23,34,.45); }
         {% if inst.url %}&nbsp;&middot;&nbsp;<a href="{{ inst.url }}" target="_blank" style="color:var(--accent)">{{ inst.url }}</a>{% endif %}
       </div>
     </div>
-    {% with loc_count=inst.locations.count %}
+    {% with loc_count=inst.leaf_location_count %}
     <div style="color:var(--muted);font-size:12px">{{ loc_count }} location{{ loc_count|pluralize }}</div>
     {% endwith %}
   </div>
+
+  {% if inst.group_summaries %}
+  <div class="inst-locations" style="border-top:1px solid var(--border);margin-top:10px;padding-top:8px">
+    <div style="font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px">Groups</div>
+    <div class="loc-row" style="flex-wrap:wrap;gap:0 4px;font-size:12.5px">
+      {% for g in inst.group_summaries %}<span><a href="{% url 'group-page-detail' g.name %}" style="color:var(--accent);text-decoration:none" title="Open group {{ g.name }}">{{ g.name }}</a> <span style="color:var(--muted)">({{ g.user_count }} user{{ g.user_count|pluralize }} here)</span>{% if not forloop.last %},{% endif %}</span>{% endfor %}
+    </div>
+  </div>
+  {% endif %}
 
   {% with inst_users=inst.users.all %}
   {% if inst_users %}
   <div class="inst-locations" style="border-top:1px solid var(--border);margin-top:10px;padding-top:8px">
     <div style="font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px">Users</div>
-    {% for profile in inst_users %}
-    <div class="loc-row">
-      <span class="loc-type" style="background:var(--accent-faint,#e8f0fe);color:var(--accent)">
-        {{ profile.user.get_full_name|default:profile.user.username }}
-      </span>
-      <a href="{% url 'user-inventory' profile.user.username %}" style="color:var(--accent);font-size:12px;text-decoration:none" title="Component instances owned by {{ profile.user.username }}">{{ profile.user.username }}: view owned items</a>
-    </div>
-    {% endfor %}
+    <table class="inst-users">
+      <thead>
+        <tr><th>User</th><th>Groups</th><th>Owned items</th></tr>
+      </thead>
+      <tbody>
+        {% for profile in inst_users %}
+        <tr>
+          <td class="iu-name">{{ profile.user.get_full_name|default:profile.user.username }}</td>
+          <td class="iu-groups">{% for g in profile.user.groups.all %}<a href="{% url 'group-page-detail' g.name %}">{{ g.name }}</a>{% if not forloop.last %}, {% endif %}{% empty %}&mdash;{% endfor %}</td>
+          <td class="iu-items"><a href="{% url 'user-inventory' profile.user.username %}" title="Component instances owned by {{ profile.user.username }}">{{ profile.user.username }}: view owned items</a></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
   </div>
   {% endif %}
 {% endwith %}
@@ -91,23 +121,21 @@ dialog.modal::backdrop { background: rgba(20,23,34,.45); }
       <a href="{% url 'location-inventory' loc.pk %}"
          style="color:var(--accent);text-decoration:none"
          title="View all inventory at {{ loc.name }}">{{ loc.name }}</a>
-      {% if loc.location_type == 'room' and user.is_superuser %}
+      {% if loc.needs_parent and user.is_superuser %}
       {% comment %}
-        Legacy-repair control: lets a superuser set/clear a Room's parent
-        Building after the fact. Only 'room' locations get this -- see
-        location_update_parent's docstring for why this doesn't generalize
-        to other location types.
+        Repair/move control for rooms, cabinets and shelves: the parent must
+        be a building / room / cabinet respectively (see
+        location_update_parent). A location with no parent yet -- legacy
+        data -- is flagged and has to be given one.
       {% endcomment %}
       <form method="post" action="{% url 'location-update-parent' loc.pk %}"
             style="display:flex;align-items:center;gap:4px;margin-left:auto">
         {% csrf_token %}
         <span style="color:var(--muted);font-size:12px">&rarr;</span>
-        <select name="parent" style="font-size:12px;padding:2px 4px">
-          <option value="">&mdash; no building &mdash;</option>
-          {% for bldg in inst.locations.all %}
-          {% if bldg.location_type == 'building' %}
-          <option value="{{ bldg.pk }}" {% if loc.parent_id == bldg.pk %}selected{% endif %}>{{ bldg.name }}</option>
-          {% endif %}
+        <select name="parent" style="font-size:12px;padding:2px 4px" {% if not loc.parent_id %}required{% endif %}>
+          {% if not loc.parent_id %}<option value="">&mdash; choose parent (required) &mdash;</option>{% endif %}
+          {% for cand in loc.eligible_parents %}
+          <option value="{{ cand.pk }}" {% if loc.parent_id == cand.pk %}selected{% endif %}>{{ cand.name }}</option>
           {% endfor %}
         </select>
         <button type="submit" class="btn btn-ghost" style="font-size:11.5px;padding:2px 8px">Save</button>
@@ -147,13 +175,13 @@ dialog.modal::backdrop { background: rgba(20,23,34,.45); }
       <div class="modal-field">
         <label for="loc-parent-{{ inst.pk }}">Parent Location</label>
         <select id="loc-parent-{{ inst.pk }}" name="parent">
-          <option value="">— None (top level) —</option>
+          <option value="">— None —</option>
           {% for loc in inst.locations.all %}
-          <option value="{{ loc.pk }}" {% if loc_institution == inst.pk and loc_parent == loc.pk %}selected{% endif %}>{{ loc.full_path }}</option>
+          <option value="{{ loc.pk }}" data-type="{{ loc.location_type }}" {% if loc_institution == inst.pk and loc_parent == loc.pk %}selected{% endif %}>{{ loc.full_path }}</option>
           {% endfor %}
         </select>
         <div style="font-size:11px;color:var(--muted);margin-top:4px">
-          Only locations already in {{ inst.name }} are offered -- a building/room/cabinet/shelf hierarchy only makes sense within one institution.
+          Required for rooms (parent: a building), cabinets (a room) and shelves (a cabinet); buildings take none. Only locations already in {{ inst.name }} are offered.
         </div>
       </div>
       {% endif %}
@@ -174,6 +202,28 @@ dialog.modal::backdrop { background: rgba(20,23,34,.45); }
   dlg.addEventListener('click', function (e) {
     if (e.target === dlg) dlg.close();
   });
+  // Only offer parents of the type the chosen location type requires.
+  var need = {room: 'building', cabinet: 'room', shelf: 'cabinet'};
+  var typeSel = document.getElementById('loc-type-{{ inst.pk }}');
+  var parSel  = document.getElementById('loc-parent-{{ inst.pk }}');
+  function syncParents() {
+    if (!parSel) return;
+    var want = need[typeSel.value];
+    var field = parSel.closest('.modal-field');
+    field.style.display = (typeSel.value === 'building') ? 'none' : '';
+    Array.prototype.forEach.call(parSel.options, function (o) {
+      if (!o.value) { o.hidden = !!want; o.disabled = !!want; return; }
+      var ok = !want || o.getAttribute('data-type') === want;
+      o.hidden = !ok; o.disabled = !ok;
+    });
+    if (typeSel.value === 'building') { parSel.value = ''; }
+    else if (parSel.selectedOptions[0] && parSel.selectedOptions[0].disabled) { parSel.value = ''; }
+    if (want && !parSel.value) {
+      var first = Array.prototype.find.call(parSel.options, function (o) { return o.value && !o.disabled; });
+      if (first) parSel.value = first.value;
+    }
+  }
+  if (typeSel) { typeSel.addEventListener('change', syncParents); syncParents(); }
   {% if loc_institution == inst.pk and loc_error %}
   dlg.showModal();
   {% endif %}
