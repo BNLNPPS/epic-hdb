@@ -1476,7 +1476,7 @@ def design_list(request):
     sort      = request.GET.get('sort', '')
     direction = request.GET.get('dir', 'asc')
 
-    qs = Design.objects.select_related('owner_group', 'owner_user').annotate(
+    qs = Design.objects.select_related('owner_group', 'owner_user', 'location__institution').annotate(
         element_count=Count('elements')
     )
     if q:
@@ -1489,6 +1489,7 @@ def design_list(request):
     _sort_map = {
         'name':  'name',
         'count': 'element_count',
+        'location': 'location__name',
         'group': 'owner_group__name',
         'owner': 'owner_user__username',
     }
@@ -2445,6 +2446,19 @@ def institution_list(request):
         locs = list(inst.locations.all())
         parent_ids = {l.parent_id for l in locs if l.parent_id}
         inst.leaf_location_count = sum(1 for l in locs if l.pk not in parent_ids)
+        # Slash-separated path from the top of the hierarchy (normally the
+        # building) down to each location, built from the already-loaded
+        # rows (no per-row queries); list sorted by path so children sit
+        # right after their parents.
+        by_pk = {l.pk: l for l in locs}
+        for l in locs:
+            names, node, seen = [], l, set()
+            while node is not None and node.pk not in seen:
+                seen.add(node.pk)
+                names.append(node.name)
+                node = by_pk.get(node.parent_id)
+            l.path_label = ' / '.join(reversed(names))
+        inst.sorted_locations = sorted(locs, key=lambda l: l.path_label.lower())
         for l in locs:
             need = Location.PARENT_TYPE.get(l.location_type)
             l.eligible_parents = [p for p in locs if p.location_type == need] if need else []

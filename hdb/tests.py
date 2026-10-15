@@ -478,3 +478,33 @@ class LocationHierarchy(Base):
         self.assertEqual((by["CERN"].item_count, by["CERN"].design_count), (1, 1))
         self.assertContains(r, "2 locations, 2 items, 2 designs<")
         self.assertContains(r, "1 location, 1 item, 1 design<")
+
+
+class DesignListLocationColumn(Base):
+    def test_location_column_shown_and_sortable(self):
+        inst = Institution.objects.create(name="Argonne", abbreviation="ANL")
+        b = Location.objects.create(name="AB", location_type="building", institution=inst)
+        far = Location.objects.create(name="Annex", parent=b, institution=inst)
+        self.design("Alpha", location=self.l1)
+        self.design("Beta", location=far)
+        Design.objects.create(name="Gamma", owner_group=self.group)  # no location
+        r = self.client.get(reverse("design-list"))
+        self.assertContains(r, "<th class=\"th-sort\">")
+        self.assertContains(r, "Location")
+        self.assertContains(r, "ANL / Annex")
+        self.assertContains(r, "BNL / L1")
+        r = self.client.get(reverse("design-list"), {"sort": "location", "dir": "asc"})
+        names = [d.name for d in r.context["page_obj"]]
+        self.assertEqual(names.index("Beta") < names.index("Alpha"), True)  # Annex < L1
+
+    def test_location_rows_show_slash_path_from_building(self):
+        room = self.l1
+        cab = Location.objects.create(name="Cab", location_type="cabinet", parent=room, institution=self.inst)
+        Location.objects.create(name="Shelf3", location_type="shelf", parent=cab, institution=self.inst)
+        r = self.client.get(reverse("institution-list"))
+        for path in ("B / L1 / Cab / Shelf3", "B / L1 / Cab", "B / L1", "B / L2"):
+            self.assertContains(r, ">%s</a>" % path, msg_prefix=path)
+        html = r.content.decode()
+        self.assertLess(html.index(">B / L1</a>"), html.index(">B / L1 / Cab</a>"))
+        self.assertLess(html.index(">B / L1 / Cab / Shelf3</a>"), html.index(">B / L2</a>"))
+        self.assertNotContains(r, "&rarr; B<")

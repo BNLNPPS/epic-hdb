@@ -115,12 +115,12 @@ dialog.modal::backdrop { background: rgba(20,23,34,.45); }
       <button type="button" class="btn btn-ghost" style="font-size:11.5px;padding:3px 9px" onclick="document.getElementById('add-location-modal-{{ inst.pk }}').showModal()">+ Add Location</button>
       {% endif %}
     </div>
-    {% for loc in inst.locations.all %}
+    {% for loc in inst.sorted_locations %}
     <div class="loc-row">
       <span class="loc-type">{{ loc.location_type }}</span>
       <a href="{% url 'location-inventory' loc.pk %}"
          style="color:var(--accent);text-decoration:none"
-         title="View all inventory at {{ loc.name }}">{{ loc.name }}</a>
+         title="View all inventory at {{ loc.path_label }}">{{ loc.path_label }}</a>
       {% if loc.needs_parent and user.is_superuser %}
       {% comment %}
         Repair/move control for rooms, cabinets and shelves: the parent must
@@ -135,13 +135,11 @@ dialog.modal::backdrop { background: rgba(20,23,34,.45); }
         <select name="parent" style="font-size:12px;padding:2px 4px" {% if not loc.parent_id %}required{% endif %}>
           {% if not loc.parent_id %}<option value="">&mdash; choose parent (required) &mdash;</option>{% endif %}
           {% for cand in loc.eligible_parents %}
-          <option value="{{ cand.pk }}" {% if loc.parent_id == cand.pk %}selected{% endif %}>{{ cand.name }}</option>
+          <option value="{{ cand.pk }}" {% if loc.parent_id == cand.pk %}selected{% endif %}>{{ cand.path_label }}</option>
           {% endfor %}
         </select>
         <button type="submit" class="btn btn-ghost" style="font-size:11.5px;padding:2px 8px">Save</button>
       </form>
-      {% elif loc.parent %}
-      <span style="color:var(--muted);font-size:12px">&rarr; {{ loc.parent.name }}</span>
       {% endif %}
     </div>
     {% empty %}

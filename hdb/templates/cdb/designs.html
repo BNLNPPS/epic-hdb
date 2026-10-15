@@ -84,6 +84,13 @@ dialog.modal::backdrop { background: rgba(20,23,34,.45); }
           </a>
         </th>
         {% endwith %}
+        {% with col="location" label="Location" %}
+        <th class="th-sort">
+          <a href="?{{ cqs }}&sort={{ col }}&dir={% if csort == col and cdir == 'asc' %}desc{% else %}asc{% endif %}">
+            {{ label }}<span class="sort-icon {% if csort == col %}active{% endif %}">{% if csort == col %}{% if cdir == 'asc' %}▲{% else %}▼{% endif %}{% else %}⇅{% endif %}</span>
+          </a>
+        </th>
+        {% endwith %}
         {% with col="group" label="Owner Group" %}
         <th class="th-sort">
           <a href="?{{ cqs }}&sort={{ col }}&dir={% if csort == col and cdir == 'asc' %}desc{% else %}asc{% endif %}">
@@ -106,12 +113,13 @@ dialog.modal::backdrop { background: rgba(20,23,34,.45); }
       <tr class="clickable" onclick="location.href='{% url 'design-detail' design.pk %}'">
         <td><strong>{{ design.name }}</strong></td>
         <td>{{ design.element_count }}</td>
+        <td style="font-size:12.5px">{% if design.location %}{{ design.location.institution.abbreviation|default:design.location.institution.name }} / {{ design.location.name }}{% else %}—{% endif %}</td>
         <td>{% if design.owner_group %}<span class="tag gray">{{ design.owner_group }}</span>{% else %}—{% endif %}</td>
         <td style="font-size:12.5px">{% if design.owner_user %}{{ design.owner_user.get_full_name|default:design.owner_user.username }}{% else %}—{% endif %}</td>
         <td style="color:var(--muted);font-size:12.5px">{{ design.description|truncatechars:60 }}</td>
       </tr>
       {% empty %}
-      <tr><td colspan="5"><div class="empty">No designs found{% if q %} for "{{ q }}"{% endif %}</div></td></tr>
+      <tr><td colspan="6"><div class="empty">No designs found{% if q %} for "{{ q }}"{% endif %}</div></td></tr>
       {% endfor %}
     </tbody>
   </table>
