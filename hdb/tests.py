@@ -697,3 +697,66 @@ class ItemLocationRule(Base):
         with self.assertRaises(CommandError):
             call_command("check_locations", stdout=out)
         self.assertIn("not in a room", out.getvalue())
+
+
+class ComponentBatchOwner(Base):
+    """Components page: row selection + bulk owner change."""
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        cls.other_group = Group.objects.create(name="H")
+        cls.u2 = User.objects.create_user("u2", password="x")
+        cls.u2.groups.add(cls.group)
+        cls.outsider = User.objects.create_user("out", password="x")
+        cls.outsider.groups.add(cls.other_group)
+        cls.c2 = Component.objects.create(name="C2", owner_group=cls.group, owner_user=cls.user)
+        cls.c3 = Component.objects.create(name="C3", owner_group=cls.other_group)
+
+    def post(self, **data):
+        return self.client.post(reverse("component-batch-owner"), data)
+
+    def test_page_renders_checkboxes_only_for_editable_rows(self):
+        r = self.client.get(reverse("component-list"))
+        self.assertContains(r, 'name="components" value="%s"' % self.c2.pk)
+        self.assertNotContains(r, 'name="components" value="%s"' % self.c3.pk)
+        self.assertContains(r, reverse("component-batch-owner"))
+
+    def test_reassign_selected(self):
+        r = self.post(components=[self.comp.pk, self.c2.pk], target_owner=self.u2.pk)
+        self.assertEqual(r.status_code, 302)
+        self.assertIn("batch_updated=2", r["Location"])
+        self.comp.refresh_from_db(); self.c2.refresh_from_db()
+        self.assertEqual(self.comp.owner_user, self.u2)
+        self.assertEqual(self.c2.owner_user, self.u2)
+        self.assertEqual(self.c2.log_entries.count(), 1)
+
+    def test_invalid_owner_skipped_and_counted(self):
+        r = self.post(components=[self.c2.pk], target_owner=self.outsider.pk)
+        self.assertIn("batch_skipped=1", r["Location"])
+        self.c2.refresh_from_db()
+        self.assertEqual(self.c2.owner_user, self.user)
+
+    def test_unauthorized_pk_ignored(self):
+        self.post(components=[self.c3.pk], target_owner=self.outsider.pk)
+        self.c3.refresh_from_db()
+        self.assertIsNone(self.c3.owner_user)
+
+    def test_all_filtered_mode_respects_filters(self):
+        r = self.post(all_filtered="1", q="C2", target_owner=self.u2.pk)
+        self.assertIn("batch_updated=1", r["Location"])
+        self.assertIn("q=C2", r["Location"])
+        self.comp.refresh_from_db()
+        self.assertNotEqual(self.comp.owner_user, self.u2)
+
+    def test_superuser_can_target_any_group_and_get_is_noop(self):
+        admin = User.objects.create_superuser("adm", password="x")
+        self.client.force_login(admin)
+        r = self.post(components=[self.c3.pk], target_owner=admin.pk)
+        self.assertIn("batch_updated=1", r["Location"])
+        self.assertEqual(self.client.get(reverse("component-batch-owner")).status_code, 302)
+
+    def test_banner(self):
+        r = self.client.get(reverse("component-list") + "?batch_updated=2&batch_skipped=1")
+        self.assertContains(r, "Updated 2 components.")
+        self.assertContains(r, "Skipped 1")

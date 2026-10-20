@@ -272,6 +272,44 @@ def dashboard(request):
     return render(request, 'cdb/dashboard.html', context)
 
 
+def _filtered_component_queryset(params):
+    """Build the Component queryset for the component list filters
+    (q, system, group), given a dict or QueryDict. Shared by component_list
+    and the batch owner action (component_batch_update_owner), which
+    re-derives "everything the list is currently showing" from the filters
+    components.html mirrors into the batch form."""
+    q      = params.get('q', '')
+    system = params.get('system', '')
+    group  = params.get('group', '')
+    qs = Component.objects.select_related(
+        'technical_system', 'owner_group', 'owner_user',
+    ).annotate(instance_count=Count('instances')).order_by('name')
+    if q:
+        qs = qs.filter(
+            Q(name__icontains=q) | Q(alternate_name__icontains=q) |
+            Q(model_number__icontains=q) | Q(description__icontains=q)
+        )
+    if system:
+        qs = qs.filter(technical_system__name=system)
+    if group:
+        qs = qs.filter(owner_group__name=group)
+    return qs
+
+
+def _selected_component_queryset(request, user_group_ids):
+    """Components targeted by a batch POST from the components table
+    (explicit checked pks, or all_filtered=1 plus the mirrored filters),
+    narrowed to those the requester may edit: member of the component's
+    owner_group, or superuser. Unauthorized pks are dropped, not rejected."""
+    if request.POST.get('all_filtered') == '1':
+        qs = _filtered_component_queryset(request.POST)
+    else:
+        qs = Component.objects.filter(pk__in=request.POST.getlist('components'))
+    if not request.user.is_superuser:
+        qs = qs.filter(owner_group_id__in=user_group_ids)
+    return qs
+
+
 # ── Component Catalog ─────────────────────────────────────────────────────────
 
 @login_required
@@ -325,19 +363,7 @@ def component_list(request):
     sort      = request.GET.get('sort', '')
     direction = request.GET.get('dir', 'asc')
 
-    qs = Component.objects.select_related(
-        'technical_system', 'owner_group', 'owner_user',
-    ).annotate(instance_count=Count('instances')).order_by('name')
-
-    if q:
-        qs = qs.filter(
-            Q(name__icontains=q) | Q(alternate_name__icontains=q) |
-            Q(model_number__icontains=q) | Q(description__icontains=q)
-        )
-    if system:
-        qs = qs.filter(technical_system__name=system)
-    if group:
-        qs = qs.filter(owner_group__name=group)
+    qs = _filtered_component_queryset(request.GET)
 
     _sort_map = {
         'name':   'name',
@@ -356,8 +382,25 @@ def component_list(request):
     paginator = Paginator(qs, PAGE_SIZE)
     page_obj  = paginator.get_page(request.GET.get('page'))
 
+    user_group_ids = set(request.user.groups.values_list('id', flat=True))
+
+    def _batch_int(key):
+        try:
+            return int(request.GET[key])
+        except (KeyError, ValueError):
+            return None
+
+    editable_total = qs.count() if request.user.is_superuser else qs.filter(
+        owner_group_id__in=user_group_ids
+    ).count()
+
     context = {
         'page_obj':    page_obj,
+        'users':       User.objects.order_by('username'),
+        'user_group_ids': user_group_ids,
+        'editable_total': editable_total,
+        'batch_updated': _batch_int('batch_updated'),
+        'batch_skipped': _batch_int('batch_skipped'),
         'q':           q,
         'system':      system,
         'group':       group,
@@ -687,6 +730,70 @@ def component_transfer_owner(request, pk):
                 )
 
     return redirect('component-detail', pk=comp.pk)
+
+
+@login_required
+def component_batch_update_owner(request):
+    """Batch-reassign owner_user for the selected components, from the
+    components table's batch bar. Same rules as component_transfer_owner,
+    applied per component: the requester must be in the component's
+    owner_group (or a superuser) -- enforced by dropping unauthorized
+    components from the selection -- and the new owner must be a member of
+    that component's owner_group or a superuser; components for which the
+    chosen owner isn't valid are skipped and counted (batch_skipped).
+    owner_group itself is never changed."""
+    if request.method != 'POST':
+        return redirect('component-list')
+
+    user_group_ids = set(request.user.groups.values_list('id', flat=True))
+    qs = _selected_component_queryset(request, user_group_ids)
+
+    new_owner_id = _to_pk_int(request.POST.get('target_owner'))
+    new_owner    = User.objects.filter(pk=new_owner_id).first() if new_owner_id else None
+
+    changed = []
+    skipped = 0
+    if new_owner:
+        new_owner_group_ids = set(new_owner.groups.values_list('id', flat=True))
+        for comp in qs.select_related('owner_user'):
+            valid = new_owner.is_superuser or (
+                comp.owner_group_id is not None and comp.owner_group_id in new_owner_group_ids
+            )
+            if not valid:
+                skipped += 1
+            elif comp.owner_user_id != new_owner.pk:
+                changed.append(comp)
+
+    if changed:
+        with transaction.atomic():
+            LogEntry.objects.bulk_create([
+                LogEntry(
+                    id=str(uuid.uuid4()),
+                    component=comp,
+                    topic='other',
+                    logged_by=request.user,
+                    entry=(
+                        f"Ownership of {comp.name} transferred from "
+                        f"{comp.owner_user.get_full_name() or comp.owner_user.username if comp.owner_user else 'unassigned'} "
+                        f"to {new_owner.get_full_name() or new_owner.username} by "
+                        f"{request.user.get_full_name() or request.user.username} (batch update)."
+                    ),
+                )
+                for comp in changed
+            ])
+            Component.objects.filter(
+                pk__in=[c.pk for c in changed]
+            ).update(owner_user=new_owner, modified_on=timezone.now())
+
+    params = {
+        k: request.POST.get(k, '')
+        for k in ('q', 'system', 'group')
+        if request.POST.get(k)
+    }
+    params.update({k: v for k, v in
+                   (('batch_updated', len(changed)), ('batch_skipped', skipped)) if v})
+    url = reverse('component-list')
+    return redirect(f"{url}?{urlencode(params)}" if params else url)
 
 
 # ── Component Inventory ───────────────────────────────────────────────────────

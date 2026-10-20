@@ -13,6 +13,8 @@ urlpatterns = [
 
     path("dashboard/",                views_web.dashboard,        name="dashboard"),
     path("components/",               views_web.component_list,   name="component-list"),
+    path("components/batch/update-owner/", views_web.component_batch_update_owner,
+         name="component-batch-owner"),
     path("components/<str:pk>/",      views_web.component_detail, name="component-detail"),
     path("components/<str:pk>/properties/<str:property_id>/delete/",
                                        views_web.component_property_delete, name="component-property-delete"),
