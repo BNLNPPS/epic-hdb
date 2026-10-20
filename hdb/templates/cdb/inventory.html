@@ -143,18 +143,38 @@ dialog.modal::backdrop { background: rgba(20,23,34,.45); }
       <option value="{{ loc.pk }}" {% if location == loc.pk %}selected{% endif %}>{{ loc.full_path }}</option>
     {% endfor %}
   </select>
-  <select name="system" class="filter-select">
-    <option value="">All Systems</option>
-    {% for sys in systems %}
-      <option value="{{ sys.name }}" {% if system == sys.name %}selected{% endif %}>{{ sys.name }}</option>
-    {% endfor %}
-  </select>
-  <select name="group" class="filter-select">
+  <select name="group" id="f-group" class="filter-select">
     <option value="">All Groups</option>
     {% for grp in groups %}
       <option value="{{ grp.name }}" {% if group == grp.name %}selected{% endif %}>{{ grp.name }}</option>
     {% endfor %}
   </select>
+  <select name="system" id="f-system" class="filter-select">
+    <option value="">All Systems</option>
+    {% for sys in systems %}
+      <option value="{{ sys.name }}" data-group="{{ sys.group.name|default:'' }}" {% if system == sys.name %}selected{% endif %}>{{ sys.name }}</option>
+    {% endfor %}
+  </select>
+  <script>
+    // Once a group is chosen, offer only that group's systems.
+    (function () {
+      var g = document.getElementById('f-group'), s = document.getElementById('f-system');
+      var all = Array.prototype.slice.call(s.options).slice(1).map(function (o) {
+        return {v: o.value, g: o.dataset.group};
+      });
+      function fill(keep) {
+        s.innerHTML = '<option value="">All Systems</option>';
+        all.forEach(function (x) {
+          if (g.value && x.g !== g.value) return;
+          var o = document.createElement('option'); o.value = x.v; o.textContent = x.v;
+          if (x.v === keep) o.selected = true;
+          s.appendChild(o);
+        });
+      }
+      g.addEventListener('change', function () { fill(s.value); });
+      fill(s.value);
+    })();
+  </script>
   <select name="owner" class="filter-select">
     <option value="">All Users</option>
     {% for u in users %}

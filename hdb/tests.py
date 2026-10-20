@@ -872,3 +872,94 @@ class ComponentDetailsCombined(Base):
         self.comp.refresh_from_db()
         self.assertEqual(self.comp.alternate_name, "A")
         self.assertIsNone(self.comp.owner_user)
+
+
+class ComponentCreateByUser(Base):
+    """Regular users may create components, but only for their own groups."""
+
+    def setUp(self):
+        super().setUp()
+        self.other = Group.objects.create(name="H")
+        self.ts1.group = self.group; self.ts1.save()
+
+    def create(self, **kw):
+        return self.client.post(reverse("component-list"), kw)
+
+    def test_button_and_group_choices_for_member(self):
+        r = self.client.get(reverse("component-list"))
+        self.assertContains(r, "+ New Component")
+        self.assertEqual(list(r.context["creatable_groups"]), [self.group])
+
+    def test_member_creates_in_own_group(self):
+        r = self.create(name="M1", owner_group=self.group.pk, technical_system=self.ts1.pk)
+        self.assertEqual(r.status_code, 302)
+        c = Component.objects.get(name="M1")
+        self.assertEqual(c.owner_group, self.group)
+        self.assertEqual(c.owner_user, self.user)
+
+    def test_other_group_forbidden_and_group_required(self):
+        self.assertEqual(self.create(name="M2", owner_group=self.other.pk).status_code, 403)
+        self.assertEqual(self.create(name="M3").status_code, 200)
+        self.assertFalse(Component.objects.filter(name__in=["M2", "M3"]).exists())
+
+    def test_user_without_groups_has_no_button_and_cannot_post(self):
+        loner = User.objects.create_user("loner", password="x")
+        self.client.force_login(loner)
+        self.assertNotContains(self.client.get(reverse("component-list")), "+ New Component")
+        self.assertEqual(self.create(name="M4").status_code, 403)
+
+
+class ComponentFilterOrder(Base):
+    def test_group_selector_precedes_system_and_systems_carry_group(self):
+        self.ts1.group = self.group; self.ts1.save()
+        h = self.client.get(reverse("component-list")).content.decode()
+        self.assertLess(h.index('id="f-group"'), h.index('id="f-system"'))
+        self.assertIn('value="TS1" data-group="G"', h)
+
+
+class CreationLogging(Base):
+    def test_component_creation_logged(self):
+        admin = User.objects.create_superuser("adm2", password="x")
+        self.client.force_login(admin)
+        self.client.post(reverse("component-list"), {"name": "Newc", "owner_group": self.group.pk})
+        c = Component.objects.get(name="Newc")
+        e = c.log_entries.get()
+        self.assertIn("created by", e.entry)
+        self.assertEqual(e.logged_by, admin)
+
+    def test_inventory_creation_logged_both_paths(self):
+        self.client.post(reverse("component-instance-create", args=[self.comp.pk]),
+                         {"tag": "T1", "location": self.l1.pk})
+        self.client.post(reverse("inventory-list"),
+                         {"component": self.comp.pk, "tag": "T2", "location": self.l1.pk})
+        for tag in ("T1", "T2"):
+            i = ComponentInstance.objects.get(tag=tag)
+            self.assertEqual(i.log_entries.count(), 1, tag)
+
+
+class InventoryFilterOrder(Base):
+    def test_group_before_system_with_group_data(self):
+        self.ts1.group = self.group; self.ts1.save()
+        h = self.client.get(reverse("inventory-list")).content.decode()
+        self.assertLess(h.index('id="f-group"'), h.index('id="f-system"'))
+        self.assertIn('value="TS1" data-group="G"', h)
+
+
+class ComponentOwnerFilter(Base):
+    def test_filter_order_and_result_and_mirror(self):
+        Component.objects.create(name="Mine", owner_group=self.group, owner_user=self.user)
+        r = self.client.get(reverse("component-list") + "?owner=u")
+        h = r.content.decode()
+        self.assertLess(h.index('id="f-group"'), h.index('id="f-system"'))
+        self.assertLess(h.index('id="f-system"'), h.index('name="owner" class="filter-select"'))
+        self.assertEqual([c.name for c in r.context["page_obj"]], ["Mine"])
+        self.assertIn('<input type="hidden" name="owner" value="u">', h)
+
+    def test_batch_all_filtered_respects_owner(self):
+        u2 = User.objects.create_user("u2", password="x"); u2.groups.add(self.group)
+        Component.objects.create(name="Mine", owner_group=self.group, owner_user=self.user)
+        self.client.post(reverse("component-batch-owner"),
+                         {"all_filtered": "1", "owner": "u", "target_owner": u2.pk})
+        self.assertEqual(Component.objects.get(name="Mine").owner_user, u2)
+        self.comp.refresh_from_db()
+        self.assertIsNone(self.comp.owner_user)

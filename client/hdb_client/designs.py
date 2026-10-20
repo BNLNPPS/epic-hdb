@@ -251,6 +251,13 @@ class DesignClient:
                 "owner_group": technical_system.group if technical_system else None,
             },
         )
+        if created:
+            m.LogEntry.objects.create(
+                component=component,
+                topic="other",
+                logged_by=self.user if getattr(self.user, "pk", None) else None,
+                entry=f"Component {component.name} created by hdb client (design import).",
+            )
         return component, created
 
     def create_template(

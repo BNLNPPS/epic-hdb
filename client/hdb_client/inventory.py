@@ -182,5 +182,13 @@ class InventoryClient:
             inst.save()
         except ValidationError as exc:
             raise ValueError(" ".join(exc.messages))
+        who = getattr(self.user, "get_full_name", lambda: "")() or getattr(self.user, "username", "client")
+        m.LogEntry.objects.create(
+            component_instance=inst,
+            topic="inventory",
+            logged_by=self.user if getattr(self.user, "pk", None) else None,
+            entry=(f"Instance {inst.tag or inst.pk} of {component.name} created by {who} "
+                   f"(hdb client). Location: {inst.location or 'unassigned'}."),
+        )
         return ser.instance_detail(inst)
     

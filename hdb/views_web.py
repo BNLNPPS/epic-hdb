@@ -281,6 +281,7 @@ def _filtered_component_queryset(params):
     q      = params.get('q', '')
     system = params.get('system', '')
     group  = params.get('group', '')
+    owner  = params.get('owner', '')
     qs = Component.objects.select_related(
         'technical_system', 'owner_group', 'owner_user',
     ).annotate(instance_count=Count('instances')).order_by('name')
@@ -293,6 +294,8 @@ def _filtered_component_queryset(params):
         qs = qs.filter(technical_system__name=system)
     if group:
         qs = qs.filter(owner_group__name=group)
+    if owner:
+        qs = qs.filter(owner_user__username=owner)
     return qs
 
 
@@ -326,11 +329,14 @@ def component_list(request):
     list re-renders with the modal reopened and the entered values kept."""
     form_error = None
     form_data  = {}
-    can_create = request.user.is_superuser
+    user_group_ids_c = set(request.user.groups.values_list('id', flat=True))
+    # Superusers may create a component for any group (or none); other users
+    # only for a group they belong to, and must pick one.
+    can_create = request.user.is_superuser or bool(user_group_ids_c)
 
     if request.method == 'POST':
         if not can_create:
-            return HttpResponseForbidden("You don't have permission to create a new component.")
+            return HttpResponseForbidden("You can only create components for a group you belong to.")
         name                 = request.POST.get('name', '').strip()
         alternate_name       = request.POST.get('alternate_name', '').strip()
         model_number         = request.POST.get('model_number', '').strip()
@@ -353,6 +359,10 @@ def component_list(request):
             form_error = f'A component named "{name}" already exists.'
         elif owner_group_id and not owner_group:
             form_error = 'Unknown group.'
+        elif not request.user.is_superuser and owner_group is None:
+            form_error = 'Choose one of your groups.'
+        elif not request.user.is_superuser and owner_group.pk not in user_group_ids_c:
+            return HttpResponseForbidden("You can only create components for a group you belong to.")
         elif technical_system_id and not system_obj:
             form_error = 'Unknown system.'
         elif system_obj and (owner_group is None or system_obj.group_id != owner_group.pk):
@@ -368,11 +378,23 @@ def component_list(request):
                 owner_user=request.user,
                 created_by=request.user,
             )
+            LogEntry.objects.create(
+                component=comp,
+                topic='other',
+                logged_by=request.user,
+                entry=(
+                    f"Component {comp.name} created by "
+                    f"{request.user.get_full_name() or request.user.username}. "
+                    f"Group: {owner_group or 'none'}; "
+                    f"system: {system_obj or 'none'}."
+                ),
+            )
             return redirect('component-detail', pk=comp.pk)
 
     q         = request.GET.get('q', '')
     system    = request.GET.get('system', '')
     group     = request.GET.get('group', '')
+    owner     = request.GET.get('owner', '')
     sort      = request.GET.get('sort', '')
     direction = request.GET.get('dir', 'asc')
 
@@ -431,14 +453,18 @@ def component_list(request):
         'q':           q,
         'system':      system,
         'group':       group,
+        'owner':       owner,
         'sort':        sort,
         'dir':         direction,
         'sort_qs':     _qs(request, 'sort', 'dir'),
-        'systems':     TechnicalSystem.objects.order_by('name'),
+        'systems':     TechnicalSystem.objects.select_related('group').order_by('name'),
         'groups':      Group.objects.order_by('name'),
         'query_str':   _qs(request),
         'active_page': 'components',
         'can_create':  can_create,
+        'creatable_groups': (Group.objects.order_by('name') if request.user.is_superuser
+                             else Group.objects.filter(pk__in=user_group_ids_c).order_by('name')),
+        'group_required': not request.user.is_superuser,
         'form_error':  form_error,
         'form_data':   form_data,
         'open_modal':  bool(form_error),
@@ -876,7 +902,7 @@ def component_batch_update_owner(request):
 
     params = {
         k: request.POST.get(k, '')
-        for k in ('q', 'system', 'group')
+        for k in ('q', 'system', 'group', 'owner')
         if request.POST.get(k)
     }
     params.update({k: v for k, v in
@@ -1038,7 +1064,7 @@ def inventory_list(request):
         'sort_qs':      sort_qs,
         'per_page':         per_page,
         'per_page_choices': PAGE_SIZE_CHOICES,
-        'systems':      TechnicalSystem.objects.order_by('name'),
+        'systems':      TechnicalSystem.objects.select_related('group').order_by('name'),
         'groups':       Group.objects.order_by('name'),
         'users':        User.objects.order_by('username'),
         'query_str':    _qs(request),

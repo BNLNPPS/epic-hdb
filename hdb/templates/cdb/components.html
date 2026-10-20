@@ -82,10 +82,10 @@ dialog.modal::backdrop { background: rgba(20,23,34,.45); }
         <input type="text" id="mc-model" name="model_number" value="{{ form_data.model_number|default:'' }}">
       </div>
       <div class="modal-field">
-        <label for="mc-group">Group</label>
-        <select id="mc-group" name="owner_group">
-          <option value="">—</option>
-          {% for grp in groups %}
+        <label for="mc-group">Group{% if group_required %} *{% endif %}</label>
+        <select id="mc-group" name="owner_group" {% if group_required %}required{% endif %}>
+          <option value="">{% if group_required %}— choose group —{% else %}—{% endif %}</option>
+          {% for grp in creatable_groups %}
             <option value="{{ grp.pk }}" {% if form_data.owner_group == grp.pk %}selected{% endif %}>{{ grp.name }}</option>
           {% endfor %}
         </select>
@@ -151,20 +151,46 @@ dialog.modal::backdrop { background: rgba(20,23,34,.45); }
     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
     <input type="text" name="q" value="{{ q }}" placeholder="Search name, model number, description…">
   </div>
-  <select name="system" class="filter-select">
-    <option value="">All Systems</option>
-    {% for sys in systems %}
-      <option value="{{ sys.name }}" {% if system == sys.name %}selected{% endif %}>{{ sys.name }}</option>
-    {% endfor %}
-  </select>
-  <select name="group" class="filter-select">
+  <select name="group" id="f-group" class="filter-select">
     <option value="">All Groups</option>
     {% for grp in groups %}
       <option value="{{ grp.name }}" {% if group == grp.name %}selected{% endif %}>{{ grp.name }}</option>
     {% endfor %}
   </select>
+  <select name="system" id="f-system" class="filter-select">
+    <option value="">All Systems</option>
+    {% for sys in systems %}
+      <option value="{{ sys.name }}" data-group="{{ sys.group.name|default:'' }}" {% if system == sys.name %}selected{% endif %}>{{ sys.name }}</option>
+    {% endfor %}
+  </select>
+  <select name="owner" class="filter-select">
+    <option value="">All Users</option>
+    {% for u in users %}
+      <option value="{{ u.username }}" {% if owner == u.username %}selected{% endif %}>{{ u.get_full_name|default:u.username }}</option>
+    {% endfor %}
+  </select>
+  <script>
+    // Once a group is chosen, offer only that group's systems.
+    (function () {
+      var g = document.getElementById('f-group'), s = document.getElementById('f-system');
+      var all = Array.prototype.slice.call(s.options).slice(1).map(function (o) {
+        return {v: o.value, g: o.dataset.group, sel: o.selected};
+      });
+      function fill(keep) {
+        s.innerHTML = '<option value="">All Systems</option>';
+        all.forEach(function (x) {
+          if (g.value && x.g !== g.value) return;
+          var o = document.createElement('option'); o.value = x.v; o.textContent = x.v;
+          if (x.v === keep) o.selected = true;
+          s.appendChild(o);
+        });
+      }
+      g.addEventListener('change', function () { fill(s.value); });
+      fill(s.value);
+    })();
+  </script>
   <button type="submit" class="btn btn-primary">Search</button>
-  {% if q or system or group %}<a href="{% url 'component-list' %}" class="btn btn-ghost">Clear</a>{% endif %}
+  {% if q or system or group or owner %}<a href="{% url 'component-list' %}" class="btn btn-ghost">Clear</a>{% endif %}
 </form>
 
 <form method="post" id="batch-form" action="{% url 'component-batch-owner' %}">
@@ -172,6 +198,7 @@ dialog.modal::backdrop { background: rgba(20,23,34,.45); }
   <input type="hidden" name="q" value="{{ q }}">
   <input type="hidden" name="system" value="{{ system }}">
   <input type="hidden" name="group" value="{{ group }}">
+  <input type="hidden" name="owner" value="{{ owner }}">
   <input type="hidden" name="all_filtered" id="all-filtered-flag" value="0">
 
   <div id="batch-bar" class="batch-bar">
