@@ -14,7 +14,7 @@ from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.models import User, Group
 from django.core.exceptions import ValidationError
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.db.models import Q, Count
 from django.core.paginator import Paginator
 from django.utils import timezone
@@ -42,6 +42,11 @@ def _property_get_or_create(defaults=None, **lookup):
     return PropertyValue.objects.create(**lookup, **(defaults or {})), True
 
 PAGE_SIZE = 20
+
+ERR_ITEM_LOCATION = (
+    'Items can only be stored in a room (or a cabinet or shelf in one), '
+    'not directly in a building.'
+)
 
 # Selectable page sizes offered via a "per page" dropdown next to the
 # pagination controls, on any list page that opts into it (Inventory,
@@ -493,7 +498,7 @@ def component_detail(request, pk):
         'can_edit_properties': can_edit_properties,
         'can_transfer_owner': can_transfer_owner,
         'group_members':    group_members,
-        'locations':        Location.objects.select_related('institution').order_by('name'),
+        'locations':        Location.item_locations(),
         'form_error':      form_error,
         'form_data':       form_data,
         'open_modal':      bool(form_error),
@@ -595,6 +600,16 @@ def component_instance_create(request, pk):
         if not location_id:
             params = urlencode({
                 'instance_error': 'Please choose a location.',
+                'itag':           tag,
+                'iserial':        serial_number,
+            })
+            return redirect(f"{reverse('component-detail', kwargs={'pk': comp.pk})}?{params}")
+
+        loc = Location.objects.filter(pk=location_id).first()
+        if loc is None or not loc.can_hold_items():
+            params = urlencode({
+                'instance_error': ('Please choose a valid location.' if loc is None
+                                   else ERR_ITEM_LOCATION),
                 'itag':           tag,
                 'iserial':        serial_number,
             })
@@ -729,6 +744,10 @@ def inventory_list(request):
             form_error = 'You can only add inventory items for components owned by a group you belong to.'
         elif not location_id:
             form_error = 'Please choose a location.'
+        elif not Location.objects.filter(pk=location_id).exists():
+            form_error = 'Please choose a valid location.'
+        elif not Location.objects.get(pk=location_id).can_hold_items():
+            form_error = ERR_ITEM_LOCATION
         else:
             instance = ComponentInstance.objects.create(
                 tag=tag,
@@ -837,12 +856,14 @@ def inventory_list(request):
             else Component.objects.filter(owner_group_id__in=user_group_ids).order_by('name')
         ),
         'locations':       Location.objects.select_related('institution').order_by('name'),
+        'item_locations':  Location.item_locations(),
         'designs':         Design.objects.order_by('name'),
         'show_add_button': True,
         'user_group_ids':  user_group_ids,
         'editable_total':  editable_total,
         'batch_updated':   _batch_int('batch_updated'),
         'batch_skipped':   _batch_int('batch_skipped'),
+        'batch_installed_skipped': _batch_int('batch_installed_skipped'),
         'form_error':      form_error,
         'form_data':       form_data,
         'open_modal':      bool(form_error),
@@ -908,6 +929,9 @@ def inventory_batch_update_location(request):
     new_location = Location.objects.filter(pk=location_id).first() if location_id else None
 
     changed = []
+    if new_location and not new_location.can_hold_items():
+        messages.error(request, ERR_ITEM_LOCATION)
+        new_location = None
     if new_location:
         candidates = [
             inst for inst in qs.select_related('location')
@@ -945,7 +969,7 @@ def inventory_batch_update_location(request):
         ).update(location_id=new_location.pk, modified_on=timezone.now())
 
     return _inventory_batch_redirect(
-        request, batch_updated=len(changed), batch_skipped=skipped_installed,
+        request, batch_updated=len(changed), batch_installed_skipped=skipped_installed,
     )
 
 
@@ -1166,7 +1190,7 @@ def inventory_detail(request, pk):
         'is_in_design':        is_in_design,
         'group_members':       group_members,
         'institutions':        Institution.objects.order_by('name'),
-        'locations':            Location.objects.select_related('institution').order_by('name'),
+        'locations':            Location.item_locations(),
         'missing_identifiers': missing_identifiers,
         'form_error':      form_error,
         'form_data':       form_data,
@@ -1210,6 +1234,9 @@ def inventory_update_location(request, pk):
         new_location = Location.objects.filter(pk=location_id).first() if location_id else None
 
         if new_location and new_location != old_location:
+            if not new_location.can_hold_items():
+                messages.error(request, ERR_ITEM_LOCATION)
+                return redirect('inventory-detail', pk=instance.pk)
             if instance.design_installations.exists():
                 messages.error(
                     request,
@@ -1454,10 +1481,16 @@ def design_list(request):
             # not expected to actually happen (cycle prevention already
             # makes the template tree finite), but treat it as a form
             # error rather than a raw 500 if it somehow does.
+            # All-or-nothing: a failure part-way through (depth error, or a
+            # concurrent request taking one of the design names) must not
+            # leave half-built designs behind.
             try:
-                design = _instantiate_design(template, name, request.user)
+                with transaction.atomic():
+                    design = _instantiate_design(template, name, request.user)
             except ValidationError as exc:
                 form_error = str(exc.message) if hasattr(exc, 'message') else str(exc)
+            except IntegrityError:
+                form_error = f'A design named "{name}" already exists (or one of its sub-designs does).'
             else:
                 LogEntry.objects.create(
                     design=design,
@@ -1768,6 +1801,10 @@ def _move_design_tree(request, design, new_location, user_group_ids):
     if installs and new_location is None:
         return False, ("This design has installed inventory items, which always "
                        "need a location. Pick a location instead of None.")
+    if installs and not new_location.can_hold_items():
+        return False, ("This design has installed inventory items, which can only "
+                       "be stored in a room (or a cabinet or shelf in one), not in a "
+                       "building. Pick a room.")
     denied = [d.name for d in tree if not can(d)]
     denied += [i.instance.tag or str(i.instance.pk) for i in installs if not can(i.instance)]
     if denied:
@@ -2535,6 +2572,8 @@ def location_create(request, pk):
         error = None
         if not name:
             error = 'Name is required.'
+        elif location_type not in dict(Location.LOCATION_TYPES):
+            error = 'Unknown location type.'
         else:
             candidate = Location(name=name, location_type=location_type,
                                  institution=institution, parent=parent,

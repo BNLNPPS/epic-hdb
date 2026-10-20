@@ -93,7 +93,7 @@ dialog.modal::backdrop { background: rgba(20,23,34,.45); }
         <label for="ai-location">Location *</label>
         <select id="ai-location" name="location" required>
           <option value="">—</option>
-          {% for loc in locations %}
+          {% for loc in item_locations %}
             <option value="{{ loc.pk }}" {% if form_data.location == loc.pk %}selected{% endif %}>{{ loc.full_path }}</option>
           {% endfor %}
         </select>
@@ -128,6 +128,7 @@ dialog.modal::backdrop { background: rgba(20,23,34,.45); }
 <div class="batch-result">
   Updated {{ batch_updated }} item{{ batch_updated|pluralize }}.
   {% if batch_skipped %} Skipped {{ batch_skipped }} where the chosen owner isn't valid for that item's group.{% endif %}
+  {% if batch_installed_skipped %} Skipped {{ batch_installed_skipped }} installed in a design (move the design instead, or uninstall the item first).{% endif %}
 </div>
 {% endif %}
 
@@ -199,7 +200,7 @@ dialog.modal::backdrop { background: rgba(20,23,34,.45); }
     <span id="batch-actions-wrap" class="batch-actions">
       <select name="target_location">
         <option value="">— move to… —</option>
-        {% for loc in locations %}
+        {% for loc in item_locations %}
         <option value="{{ loc.pk }}">{{ loc.full_path }}</option>
         {% endfor %}
       </select>

@@ -105,7 +105,8 @@ def instance_detail(i) -> dict:
         "serial_number": i.serial_number,
         "description": i.description,
         "component": i.component.name if i.component_id else None,
-        "technical_system": str(i.technical_system) if i.technical_system_id else None,
+        "technical_system": (str(i.component.technical_system)
+                             if i.component_id and i.component.technical_system_id else None),
         "location": str(i.location) if i.location_id else None,
         "owner_user": i.owner_user.username if i.owner_user_id else None,
         "owner_group": str(i.owner_group) if i.owner_group_id else None,

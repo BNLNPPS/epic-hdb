@@ -24,7 +24,7 @@ class InventoryClient:
 
     def _qs(self):
         qs = _m().ComponentInstance.objects.select_related(
-            "component", "technical_system", "location",
+            "component", "component__technical_system", "location",
             "location__institution", "owner_group", "owner_user",
         )
         return access.visible_to(qs, self.user)
@@ -62,7 +62,7 @@ class InventoryClient:
         return list(qs[: _clamp(limit)])
 
     def installed_in_design(self, design_name: str, limit: int = DEFAULT_LIMIT):
-        return list(self._qs().filter(installed_at__design__name=design_name)[: _clamp(limit)])
+        return list(self._qs().filter(design_installations__element__design__name=design_name)[: _clamp(limit)])
 
     def institution_summary(self) -> list[dict]:
         from django.db.models import Count
@@ -177,6 +177,10 @@ class InventoryClient:
             owner_user=self.user,
             group_writeable=bool(owner_group),
         )
-        inst.save()
+        from django.core.exceptions import ValidationError
+        try:
+            inst.save()
+        except ValidationError as exc:
+            raise ValueError(" ".join(exc.messages))
         return ser.instance_detail(inst)
     

@@ -1,15 +1,18 @@
-"""Regression tests for the "Fix first" bug-review items."""
+"""Regression tests for the bug-review fixes and the feature work built on them."""
 import io
+from unittest import mock
 from contextlib import redirect_stdout
 
 from django.contrib.auth.models import Group, User
 from django.core.management import call_command
 from django.core.management.base import CommandError
+from django.db import IntegrityError
 from django.db.models import ProtectedError
 from django.test import TestCase
 from django.urls import reverse
 
 from .models import (
+    DesignTemplate, DesignTemplateElement,
     Component, ComponentInstance, Design, DesignElement, DesignElementInstance,
     Institution, Location, PropertyType, PropertyValue, TechnicalSystem,
 )
@@ -77,7 +80,7 @@ class LocationInvariant(Base):
         self.assertEqual(installed.location_id, self.l1.pk)
         self.assertGreater(free.modified_on, before)
         self.assertIn("batch_updated=1", r["Location"])
-        self.assertIn("batch_skipped=1", r["Location"])
+        self.assertIn("batch_installed_skipped=1", r["Location"])
 
     def test_design_move_carries_installed_items_and_subdesigns(self):
         parent, child = self.design("P"), self.design("Ch")
@@ -556,3 +559,141 @@ class UserPage(Base):
         html = self.client.get(reverse("user-inventory", args=["u"])).content.decode()
         self.assertIn("<h1>Ann Lee</h1>", html)
         self.assertNotIn("()", html)
+
+
+class BugReviewFixes(Base):
+    def test_batch_banner_blames_installation_not_owner(self):
+        free, installed = self.instance("a"), self.instance("b")
+        self.install(self.design(), installed)
+        r = self.client.post(reverse("inventory-batch-location"), {
+            "instances": [free.pk, installed.pk], "target_location": self.l2.pk}, follow=True)
+        self.assertContains(r, "installed in a design")
+        self.assertNotContains(r, "chosen owner isn")
+
+    def test_location_create_rejects_unknown_type(self):
+        su = User.objects.create_superuser("root", password="x")
+        self.client.force_login(su)
+        self.client.post(reverse("location-create", args=[self.inst.pk]),
+                         {"name": "Weird", "location_type": "foo"})
+        self.assertFalse(Location.objects.filter(name="Weird").exists())
+
+    def test_client_installed_in_design(self):
+        import sys
+        from django.conf import settings
+        sys.path.insert(0, str(settings.BASE_DIR / "client"))
+        from hdb_client import HDBClient
+        i, j = self.instance("in"), self.instance("out")
+        self.install(self.design("Rack"), i)
+        found = HDBClient(user=self.user).inventory.installed_in_design("Rack")
+        self.assertEqual([x.pk for x in found], [i.pk])
+
+    def test_design_instantiation_is_all_or_nothing(self):
+        tpl = DesignTemplate.objects.create(name="T", owner_group=self.group)
+        DesignTemplateElement.objects.create(template=tpl, element_name="e", component=self.comp)
+        fake = mock.MagicMock()
+        fake.objects.create.side_effect = IntegrityError("boom")
+        with mock.patch("hdb.views_web.DesignElement", fake):
+            r = self.client.post(reverse("design-list"), {"template": tpl.pk, "name": "NewD"})
+        self.assertEqual(r.status_code, 200)
+        self.assertFalse(Design.objects.filter(name="NewD").exists())
+        self.assertContains(r, "already exists")
+
+    def test_client_system_views_follow_the_component(self):
+        import sys
+        from django.conf import settings
+        sys.path.insert(0, str(settings.BASE_DIR / "client"))
+        from hdb_client import HDBClient
+        i = self.instance("x")                      # inherits TS1
+        Component.objects.filter(pk=self.comp.pk).update(technical_system=self.ts2)  # drift
+        c = HDBClient(user=self.user)
+        self.assertEqual([x.pk for x in c.systems.instances("TS2")], [i.pk])
+        self.assertEqual(list(c.systems.instances("TS1")), [])
+        counts = {r["name"]: r["instances"] for r in c.systems.instance_counts()}
+        self.assertEqual((counts["TS1"], counts["TS2"]), (0, 1))
+        self.assertEqual(c.systems.summary("TS2")["instance_count"], 1)
+        self.assertEqual(c.inventory.get(i.pk) and c.where_is(i.pk)["technical_system"], "TS2")
+
+
+class ItemLocationRule(Base):
+    """Inventory items live in rooms (or cabinets/shelves in them), never in a building."""
+
+    def test_model_rejects_building_and_orphan_other(self):
+        from django.core.exceptions import ValidationError
+        with self.assertRaises(ValidationError):
+            self.instance("x", location=self.bldg)
+        truck = Location.objects.create(name="Truck", location_type="other", institution=self.inst)
+        with self.assertRaises(ValidationError):
+            self.instance("y", location=truck)
+
+    def test_room_cabinet_shelf_and_other_under_room_are_allowed(self):
+        cab = Location.objects.create(name="Cab", location_type="cabinet", parent=self.l1, institution=self.inst)
+        shelf = Location.objects.create(name="Sh", location_type="shelf", parent=cab, institution=self.inst)
+        box = Location.objects.create(name="Box", location_type="other", parent=self.l1, institution=self.inst)
+        for loc in (self.l1, cab, shelf, box):
+            self.instance("t-" + loc.name, location=loc)
+        pks = {l.pk for l in Location.item_locations()}
+        self.assertTrue({self.l1.pk, cab.pk, shelf.pk, box.pk} <= pks)
+        self.assertNotIn(self.bldg.pk, pks)
+
+    def test_legacy_item_in_building_can_still_be_edited_but_not_moved_there(self):
+        i = self.instance("legacy")
+        ComponentInstance.objects.filter(pk=i.pk).update(location=self.bldg)   # legacy row
+        i.refresh_from_db()
+        i.description = "edited"; i.save()                                      # unrelated edit is fine
+        i.location = self.bldg
+        i.description = "again"; i.save()                                       # unchanged location: fine
+        i.location = self.l2; i.save()                                          # moving into a room: fine
+
+    def test_single_move_to_building_refused(self):
+        i = self.instance()
+        r = self.client.post(reverse("inventory-update-location", args=[i.pk]),
+                             {"location": self.bldg.pk}, follow=True)
+        i.refresh_from_db()
+        self.assertEqual(i.location_id, self.l1.pk)
+        self.assertContains(r, "not directly in a building")
+
+    def test_batch_move_to_building_refused(self):
+        i = self.instance()
+        r = self.client.post(reverse("inventory-batch-location"),
+                             {"instances": [i.pk], "target_location": self.bldg.pk}, follow=True)
+        i.refresh_from_db()
+        self.assertEqual(i.location_id, self.l1.pk)
+        self.assertContains(r, "not directly in a building")
+
+    def test_create_forms_refuse_building_and_pickers_only_offer_valid_locations(self):
+        r = self.client.post(reverse("inventory-list"), {
+            "component": self.comp.pk, "location": self.bldg.pk, "tag": "n"})
+        self.assertEqual(ComponentInstance.objects.filter(tag="n").count(), 0)
+        self.assertContains(r, "not directly in a building")
+        r = self.client.post(reverse("component-instance-create", args=[self.comp.pk]),
+                             {"location": self.bldg.pk, "tag": "n2"}, follow=True)
+        self.assertEqual(ComponentInstance.objects.filter(tag="n2").count(), 0)
+        self.assertContains(r, "not directly in a building")
+        page = self.client.get(reverse("inventory-list")).context
+        self.assertNotIn(self.bldg.pk, [l.pk for l in page["item_locations"]])
+        self.assertIn(self.bldg.pk, [l.pk for l in page["locations"]])   # filter still lists everything
+
+    def test_design_move_with_items_to_building_refused_but_empty_design_may_go(self):
+        d = self.design("D"); self.install(d, self.instance())
+        self.client.post(reverse("design-update-location", args=[d.pk]), {"location": self.bldg.pk})
+        d.refresh_from_db(); self.assertEqual(d.location_id, self.l1.pk)
+        empty = self.design("E")
+        self.client.post(reverse("design-update-location", args=[empty.pk]), {"location": self.bldg.pk})
+        empty.refresh_from_db(); self.assertEqual(empty.location_id, self.bldg.pk)
+
+    def test_client_create_reports_building_error(self):
+        import sys
+        from django.conf import settings
+        sys.path.insert(0, str(settings.BASE_DIR / "client"))
+        from hdb_client import HDBClient
+        with self.assertRaisesRegex(ValueError, "room"):
+            HDBClient(user=self.user).inventory.create(component_name="C", location_name="B")
+
+    def test_check_locations_reports_stranded_items(self):
+        from django.core.management.base import CommandError
+        i = self.instance("legacy")
+        ComponentInstance.objects.filter(pk=i.pk).update(location=self.bldg)
+        out = io.StringIO()
+        with self.assertRaises(CommandError):
+            call_command("check_locations", stdout=out)
+        self.assertIn("not in a room", out.getvalue())

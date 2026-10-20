@@ -135,6 +135,43 @@ class Location(models.Model):
         super().clean()
         self.validate_hierarchy()
 
+    # Inventory items may only be placed in a room or in something inside
+    # one (a cabinet or shelf -- the hierarchy guarantees those sit under a
+    # room), never directly in a building. An "other" location counts only
+    # if it sits somewhere under a room.
+    ITEM_TYPES = ("room", "cabinet", "shelf")
+
+    def can_hold_items(self):
+        """True if inventory items may be stored at this location."""
+        if self.location_type in self.ITEM_TYPES:
+            return True
+        if self.location_type == "other":
+            node, hops = self.parent if self.parent_id else None, 0
+            while node is not None and hops < 20:
+                if node.location_type == "room":
+                    return True
+                node, hops = (node.parent if node.parent_id else None), hops + 1
+        return False
+
+    @classmethod
+    def item_locations(cls):
+        """All locations where items may be stored (see can_hold_items),
+        ordered by name -- for the location pickers of inventory forms.
+        Computed from one query, no per-row lookups."""
+        locs = list(cls.objects.select_related("institution").order_by("name"))
+        by_pk = {l.pk: l for l in locs}
+
+        def under_room(l):
+            node, hops = by_pk.get(l.parent_id), 0
+            while node is not None and hops < 20:
+                if node.location_type == "room":
+                    return True
+                node, hops = by_pk.get(node.parent_id), hops + 1
+            return False
+
+        return [l for l in locs if l.location_type in cls.ITEM_TYPES
+                or (l.location_type == "other" and under_room(l))]
+
     def full_path(self):
         """Return slash-separated path: Institution / Building / Room / …
         institution is a required field, so it's always there to anchor
@@ -425,6 +462,19 @@ class ComponentInstance(OwnedModel):
             self.id = str(uuid.uuid4())
         if self.technical_system_id is None and self.component_id:
             self.technical_system = self.component.technical_system
+        if self.location_id:
+            # Checked when an item is created or moved -- not on every save,
+            # so legacy rows already sitting in a building can still have
+            # unrelated fields edited until someone moves them.
+            old = None
+            if not self._state.adding:
+                old = (type(self).objects.filter(pk=self.pk)
+                       .values_list("location_id", flat=True).first())
+            if self._state.adding or old != self.location_id:
+                if not self.location.can_hold_items():
+                    raise ValidationError(
+                        f"Items can only be stored in a room (or a cabinet or shelf in one); "
+                        f"{self.location.name!r} is a {self.location.location_type}.")
         super().save(*args, **kwargs)
 
     def effective_properties(self):

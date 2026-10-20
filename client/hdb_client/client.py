@@ -41,7 +41,8 @@ class HDBClient:
         return {
             "id": str(pk),
             "component": inst.component.name if inst.component else None,
-            "technical_system": str(inst.technical_system) if inst.technical_system else None,
+            "technical_system": (str(inst.component.technical_system)
+                                 if inst.component and inst.component.technical_system else None),
             "location": str(loc) if loc else None,
             "institution": str(loc.institution) if loc else None,
             "city": loc.institution.city if loc else None,

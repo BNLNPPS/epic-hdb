@@ -24,9 +24,10 @@ class SystemClient:
         ).select_related("owner_group", "owner_user")
 
     def instances(self, system_name: str):
-        """All component instances directly tagged with this technical system."""
+        """All component instances of components in this technical system
+        (an instance's system is its component's)."""
         return _m().ComponentInstance.objects.filter(
-            technical_system__name__iexact=system_name
+            component__technical_system__name__iexact=system_name
         ).select_related(
             "component", "location", "location__institution",
             "owner_group", "owner_user",
@@ -39,7 +40,7 @@ class SystemClient:
             _m().TechnicalSystem.objects
             .annotate(
                 component_count=Count("components", distinct=True),
-                instance_count=Count("component_instances", distinct=True),
+                instance_count=Count("components__instances", distinct=True),
             )
             .order_by("name")
         )
@@ -61,5 +62,5 @@ class SystemClient:
             "component_count": _m().Component.objects.filter(
                                    technical_system=sys_obj).count(),
             "instance_count":  _m().ComponentInstance.objects.filter(
-                                   technical_system=sys_obj).count(),
+                                   component__technical_system=sys_obj).count(),
         }

@@ -26,9 +26,10 @@ The seed_hdb command should contain the following entities:
   * BTOF-Sensor, group set to "BTOF"
   * BTOF-Readout, group set to "BTOF"
 
-* Locations:
-  * CUA, Storage Room
-  * UIC, Test Lab
+* Locations (a room must sit in a building, so each of these rooms gets a "Main Building"):
+  * CUA, Main Building, Storage Room
+  * UIC, Main Building, Test Lab
+  * BNL, Bldg.510A
 
 * Components:
  * PbWO4 Crystal (to be used in the BEMC-CRYSTAL technical system)
