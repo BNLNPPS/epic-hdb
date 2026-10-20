@@ -57,6 +57,43 @@ dialog.modal::backdrop { background: rgba(20,23,34,.45); }
   <div>
     <div class="card">
       <h2>Details</h2>
+      {% if can_edit_properties %}
+      <form method="post" action="{% url 'component-details-update' component.pk %}" style="margin:0">
+        {% csrf_token %}
+        <div class="field-group">
+          <div class="field-label">Alternate Name</div>
+          <input type="text" name="alternate_name" value="{{ component.alternate_name }}" maxlength="{{ alternate_name_max }}" placeholder="—"
+                 style="width:100%;max-width:420px;padding:6px 9px;border:1px solid var(--border);border-radius:8px;font-size:13px;color:var(--text);background:var(--surface)">
+        </div>
+        <div class="field-group">
+          <div class="field-label">Model Number</div>
+          <div class="field-value mono">{{ component.model_number|default:"—" }}</div>
+        </div>
+        <div class="field-group">
+          <div class="field-label">Description</div>
+          <textarea name="description" rows="3" placeholder="—"
+                    style="width:100%;font-family:inherit;resize:vertical;padding:6px 9px;border:1px solid var(--border);border-radius:8px;font-size:13px;color:var(--text);background:var(--surface)">{{ component.description }}</textarea>
+        </div>
+        {% if component.owner_group %}
+        <div class="field-group">
+          <div class="field-label">Owner Group</div>
+          <div class="field-value"><span class="tag gray">{{ component.owner_group }}</span></div>
+        </div>
+        {% endif %}
+        <div class="field-group">
+          <div class="field-label">Current Owner</div>
+          <select name="owner_user" style="padding:6px 9px;border:1px solid var(--border);border-radius:8px;font-size:13px;color:var(--text);background:var(--surface)">
+            <option value="">— None —</option>
+            {% for u in group_members %}
+            <option value="{{ u.pk }}" {% if component.owner_user_id == u.pk %}selected{% endif %}>{{ u.get_full_name|default:u.username }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="field-group" style="margin-bottom:18px">
+          <button type="submit" class="btn btn-primary" style="padding:9px 22px;font-size:14px;font-weight:600">Save changes</button>
+        </div>
+      </form>
+      {% else %}
       {% if component.alternate_name %}
       <div class="field-group">
         <div class="field-label">Alternate Name</div>
@@ -81,23 +118,9 @@ dialog.modal::backdrop { background: rgba(20,23,34,.45); }
       {% endif %}
       <div class="field-group">
         <div class="field-label">Current Owner</div>
-        <div class="field-value">
-          {% if can_transfer_owner %}
-          <form method="post" action="{% url 'component-transfer-owner' component.pk %}" style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin:0">
-            {% csrf_token %}
-            <select name="owner_user" style="padding:6px 8px;border:1px solid var(--border);border-radius:6px;font-size:13px;color:var(--text);background:var(--surface)">
-              <option value="">— None —</option>
-              {% for u in group_members %}
-              <option value="{{ u.pk }}" {% if component.owner_user_id == u.pk %}selected{% endif %}>{{ u.get_full_name|default:u.username }}</option>
-              {% endfor %}
-            </select>
-            <button type="submit" class="btn btn-ghost" style="font-size:12.5px;padding:5px 10px">Save</button>
-          </form>
-          {% else %}
-            {% if component.owner_user %}{{ component.owner_user.get_full_name|default:component.owner_user.username }}{% else %}—{% endif %}
-          {% endif %}
-        </div>
+        <div class="field-value">{% if component.owner_user %}{{ component.owner_user.get_full_name|default:component.owner_user.username }}{% else %}—{% endif %}</div>
       </div>
+      {% endif %}
       <div class="field-group">
         <div class="field-label">Created</div>
         <div class="field-value">{{ component.created_on|date:"N j, Y" }}</div>

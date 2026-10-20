@@ -82,13 +82,22 @@ dialog.modal::backdrop { background: rgba(20,23,34,.45); }
         <input type="text" id="mc-model" name="model_number" value="{{ form_data.model_number|default:'' }}">
       </div>
       <div class="modal-field">
-        <label for="mc-system">System</label>
-        <select id="mc-system" name="technical_system">
+        <label for="mc-group">Group</label>
+        <select id="mc-group" name="owner_group">
           <option value="">—</option>
-          {% for sys in systems %}
-            <option value="{{ sys.pk }}" {% if form_data.technical_system == sys.pk %}selected{% endif %}>{{ sys.name }}</option>
+          {% for grp in groups %}
+            <option value="{{ grp.pk }}" {% if form_data.owner_group == grp.pk %}selected{% endif %}>{{ grp.name }}</option>
           {% endfor %}
         </select>
+      </div>
+      <div class="modal-field">
+        <label for="mc-system">System <span style="font-weight:400">(only systems of the selected group)</span></label>
+        <select id="mc-system" name="technical_system" data-selected="{{ form_data.technical_system }}">
+          <option value="">—</option>
+        </select>
+        {% for sys in systems %}
+          <span class="mc-sys-data" hidden data-id="{{ sys.pk }}" data-group="{{ sys.group_id|default:'' }}" data-name="{{ sys.name }}"></span>
+        {% endfor %}
       </div>
     </div>
     <div class="modal-footer">
@@ -105,6 +114,25 @@ dialog.modal::backdrop { background: rgba(20,23,34,.45); }
     dlg.addEventListener('click', function (e) {
       if (e.target === dlg) dlg.close();
     });
+    // Restrict the System dropdown to the systems of the chosen Group.
+    var grp = document.getElementById('mc-group');
+    var sys = document.getElementById('mc-system');
+    var allSystems = Array.prototype.map.call(document.querySelectorAll('.mc-sys-data'), function (e) {
+      return {id: e.dataset.id, group: e.dataset.group, name: e.dataset.name};
+    });
+    function fillSystems(keep) {
+      sys.innerHTML = '';
+      var none = document.createElement('option'); none.value = ''; none.textContent = '—'; sys.appendChild(none);
+      allSystems.forEach(function (s) {
+        if (grp.value && s.group === grp.value) {
+          var o = document.createElement('option'); o.value = s.id; o.textContent = s.name;
+          if (s.id === keep) o.selected = true;
+          sys.appendChild(o);
+        }
+      });
+    }
+    grp.addEventListener('change', function () { fillSystems(''); });
+    fillSystems(sys.dataset.selected);
     {% if open_modal %}
     dlg.showModal();
     {% endif %}
@@ -155,12 +183,12 @@ dialog.modal::backdrop { background: rgba(20,23,34,.45); }
       All {{ editable_total }} matching components selected &middot; <a href="#" id="batch-clear-selection">Clear</a>
     </span>
     <span id="batch-actions-wrap" class="batch-actions">
-      <select name="target_owner">
+      <select name="target_owner" id="target-owner">
         <option value="">— choose user —</option>
-        {% for u in users %}
-        <option value="{{ u.pk }}">{{ u.get_full_name|default:u.username }}</option>
-        {% endfor %}
       </select>
+      {% for u in users %}
+      <span class="owner-data" hidden data-id="{{ u.pk }}" data-super="{% if u.is_superuser %}1{% endif %}" data-groups="{{ u.group_ids_csv }}" data-name="{{ u.get_full_name|default:u.username }}"></span>
+      {% endfor %}
       <button type="submit" class="btn btn-ghost">Reassign Owner</button>
     </span>
   </div>
@@ -241,7 +269,7 @@ dialog.modal::backdrop { background: rgba(20,23,34,.45); }
       <tr class="clickable" onclick="location.href='{% url 'component-detail' comp.pk %}'">
         <td onclick="event.stopPropagation()">
           {% if user.is_superuser or comp.owner_group_id in user_group_ids %}
-          <input type="checkbox" name="components" value="{{ comp.pk }}" class="row-check">
+          <input type="checkbox" name="components" value="{{ comp.pk }}" class="row-check" data-group="{{ comp.owner_group_id|default:0 }}">
           {% endif %}
         </td>
         <td>
@@ -274,6 +302,24 @@ dialog.modal::backdrop { background: rgba(20,23,34,.45); }
     var actionsWrap   = document.getElementById('batch-actions-wrap');
     var allFilteredFlag = document.getElementById('all-filtered-flag');
     var totalMatching = {{ editable_total }};
+    var filteredGroups = {{ filtered_group_ids|safe }}.map(String);
+    var ownerSel = document.getElementById('target-owner');
+    var owners = Array.prototype.map.call(document.querySelectorAll('.owner-data'), function (e) {
+      return {id: e.dataset.id, sup: !!e.dataset.super, groups: e.dataset.groups ? e.dataset.groups.split(',') : [], name: e.dataset.name};
+    });
+    // Offer only users valid for EVERY selected component: a superuser, or a
+    // member of each selected component's owner group.
+    function refreshOwners(groupIds) {
+      var prev = ownerSel.value;
+      ownerSel.innerHTML = '<option value="">\u2014 choose user \u2014</option>';
+      owners.forEach(function (u) {
+        var ok = u.sup || groupIds.every(function (g) { return g !== '0' && u.groups.indexOf(g) !== -1; });
+        if (!ok) return;
+        var o = document.createElement('option'); o.value = u.id; o.textContent = u.name;
+        if (u.id === prev) o.selected = true;
+        ownerSel.appendChild(o);
+      });
+    }
 
     function rowChecks() { return Array.prototype.slice.call(form.querySelectorAll('.row-check')); }
     var pageEditableCount = rowChecks().length;
@@ -291,6 +337,9 @@ dialog.modal::backdrop { background: rgba(20,23,34,.45); }
         return;
       }
 
+      var gs = [];
+      checked.forEach(function (c) { if (gs.indexOf(c.dataset.group) === -1) gs.push(c.dataset.group); });
+      refreshOwners(gs);
       bar.style.display = 'flex';
       actionsWrap.style.display = 'inline-flex';
       countLabel.textContent = n + ' selected';
@@ -311,6 +360,7 @@ dialog.modal::backdrop { background: rgba(20,23,34,.45); }
       selectAllFilteredLink.addEventListener('click', function (e) {
         e.preventDefault();
         allFilteredFlag.value = '1';
+        refreshOwners(filteredGroups);
         countLabel.textContent = totalMatching + ' selected';
         selectAllWrap.style.display = 'none';
         allSelectedLabel.style.display = 'inline';

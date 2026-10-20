@@ -760,3 +760,115 @@ class ComponentBatchOwner(Base):
         r = self.client.get(reverse("component-list") + "?batch_updated=2&batch_skipped=1")
         self.assertContains(r, "Updated 2 components.")
         self.assertContains(r, "Skipped 1")
+
+
+class ComponentCreateGroupSystem(Base):
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        cls.admin = User.objects.create_superuser("adm", password="x")
+        cls.h = Group.objects.create(name="H")
+        cls.ts1.group = cls.group; cls.ts1.save()
+        cls.ts2.group = cls.h; cls.ts2.save()
+
+    def setUp(self):
+        self.client.force_login(self.admin)
+
+    def create(self, **kw):
+        return self.client.post(reverse("component-list"), kw)
+
+    def test_group_and_matching_system_saved(self):
+        r = self.create(name="N1", owner_group=self.group.pk, technical_system=self.ts1.pk)
+        self.assertEqual(r.status_code, 302)
+        c = Component.objects.get(name="N1")
+        self.assertEqual(c.owner_group, self.group)
+        self.assertEqual(c.technical_system, self.ts1)
+
+    def test_system_of_other_group_rejected(self):
+        r = self.create(name="N2", owner_group=self.group.pk, technical_system=self.ts2.pk)
+        self.assertEqual(r.status_code, 200)
+        self.assertFalse(Component.objects.filter(name="N2").exists())
+        self.assertContains(r, "does not belong to the selected group")
+
+    def test_system_without_group_rejected_but_group_alone_ok(self):
+        self.assertEqual(self.create(name="N3", technical_system=self.ts1.pk).status_code, 200)
+        self.assertEqual(self.create(name="N4", owner_group=self.h.pk).status_code, 302)
+
+    def test_dialog_has_group_selector_and_system_data(self):
+        r = self.client.get(reverse("component-list"))
+        self.assertContains(r, 'name="owner_group"')
+        self.assertContains(r, 'data-group="%s"' % self.group.pk)
+
+
+class ComponentBatchOwnerChoices(Base):
+    def test_page_exposes_user_groups_and_row_groups(self):
+        u2 = User.objects.create_user("zz", password="x")
+        r = self.client.get(reverse("component-list"))
+        self.assertContains(r, 'data-group="%s"' % self.group.pk)
+        self.assertContains(r, 'class="owner-data"')
+        self.assertContains(r, 'data-groups="%s"' % self.group.pk)
+        self.assertEqual(list(r.context["filtered_group_ids"]), [self.group.pk])
+
+
+class ComponentAlternateName(Base):
+    def url(self):
+        return reverse("component-details-update", args=[self.comp.pk])
+
+    def test_member_can_set_and_clear(self):
+        self.client.post(self.url(), {"alternate_name": "  Alt  "})
+        self.comp.refresh_from_db()
+        self.assertEqual(self.comp.alternate_name, "Alt")
+        self.assertEqual(self.comp.log_entries.count(), 1)
+        self.client.post(self.url(), {"alternate_name": ""})
+        self.comp.refresh_from_db()
+        self.assertEqual(self.comp.alternate_name, "")
+
+    def test_non_member_forbidden(self):
+        other = User.objects.create_user("o", password="x")
+        self.client.force_login(other)
+        self.assertEqual(self.client.post(self.url(), {"alternate_name": "x"}).status_code, 403)
+        self.comp.refresh_from_db()
+        self.assertEqual(self.comp.alternate_name, "")
+
+    def test_detail_shows_form_for_member(self):
+        r = self.client.get(reverse("component-detail", args=[self.comp.pk]))
+        self.assertContains(r, 'name="alternate_name"')
+        self.assertEqual(r.content.decode().count("Save changes"), 1)
+
+
+class ComponentDescription(Base):
+    def url(self):
+        return reverse("component-details-update", args=[self.comp.pk])
+
+    def test_member_can_set_and_clear(self):
+        self.client.post(self.url(), {"description": " Line1\nLine2 "})
+        self.comp.refresh_from_db()
+        self.assertEqual(self.comp.description, "Line1\nLine2")
+        self.assertEqual(self.comp.log_entries.count(), 1)
+        self.client.post(self.url(), {"description": ""})
+        self.comp.refresh_from_db()
+        self.assertEqual(self.comp.description, "")
+
+    def test_non_member_forbidden_and_form_shown_to_member(self):
+        r = self.client.get(reverse("component-detail", args=[self.comp.pk]))
+        self.assertContains(r, '<textarea name="description"')
+        self.client.force_login(User.objects.create_user("o", password="x"))
+        self.assertEqual(self.client.post(self.url(), {"description": "x"}).status_code, 403)
+
+
+class ComponentDetailsCombined(Base):
+    def test_all_three_fields_in_one_post(self):
+        u2 = User.objects.create_user("u2", password="x"); u2.groups.add(self.group)
+        self.client.post(reverse("component-details-update", args=[self.comp.pk]),
+                         {"alternate_name": "A", "description": "D", "owner_user": u2.pk})
+        self.comp.refresh_from_db()
+        self.assertEqual((self.comp.alternate_name, self.comp.description, self.comp.owner_user), ("A", "D", u2))
+        self.assertEqual(self.comp.log_entries.count(), 3)
+
+    def test_owner_outside_group_ignored(self):
+        out = User.objects.create_user("out", password="x")
+        self.client.post(reverse("component-details-update", args=[self.comp.pk]),
+                         {"alternate_name": "A", "owner_user": out.pk})
+        self.comp.refresh_from_db()
+        self.assertEqual(self.comp.alternate_name, "A")
+        self.assertIsNone(self.comp.owner_user)

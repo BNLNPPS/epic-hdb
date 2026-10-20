@@ -335,23 +335,36 @@ def component_list(request):
         alternate_name       = request.POST.get('alternate_name', '').strip()
         model_number         = request.POST.get('model_number', '').strip()
         technical_system_id  = request.POST.get('technical_system') or None
+        owner_group_id       = _to_pk_int(request.POST.get('owner_group'))
         form_data = {
+            'owner_group':      owner_group_id or '',
             'name':             name,
             'alternate_name':   alternate_name,
             'model_number':     model_number,
             'technical_system': technical_system_id or '',
         }
 
+        owner_group = Group.objects.filter(pk=owner_group_id).first() if owner_group_id else None
+        system_obj  = TechnicalSystem.objects.filter(pk=technical_system_id).first() if technical_system_id else None
+
         if not name:
             form_error = 'Name is required.'
         elif Component.objects.filter(name=name, project='ePIC').exists():
             form_error = f'A component named "{name}" already exists.'
+        elif owner_group_id and not owner_group:
+            form_error = 'Unknown group.'
+        elif technical_system_id and not system_obj:
+            form_error = 'Unknown system.'
+        elif system_obj and (owner_group is None or system_obj.group_id != owner_group.pk):
+            form_error = (f'System "{system_obj.name}" does not belong to the selected group; '
+                          'choose a group first, then one of its systems.')
         else:
             comp = Component.objects.create(
                 name=name,
                 alternate_name=alternate_name,
                 model_number=model_number,
-                technical_system_id=technical_system_id,
+                technical_system=system_obj,
+                owner_group=owner_group,
                 owner_user=request.user,
                 created_by=request.user,
             )
@@ -394,9 +407,23 @@ def component_list(request):
         owner_group_id__in=user_group_ids
     ).count()
 
+    # Each user carries the ids of their groups so the batch bar can offer
+    # only users valid for the checked components' groups (client-side).
+    users = list(User.objects.order_by('username').prefetch_related('groups'))
+    for u in users:
+        u.group_ids_csv = ','.join(str(g.pk) for g in u.groups.all())
+    # Owner groups across everything the filters match (for "select all N
+    # matching"); 0 stands for "no group" (only superusers are valid then).
+    filtered_group_ids = sorted({
+        (gid or 0) for gid in
+        (qs if request.user.is_superuser else qs.filter(owner_group_id__in=user_group_ids))
+        .order_by().values_list('owner_group_id', flat=True).distinct()
+    })
+
     context = {
         'page_obj':    page_obj,
-        'users':       User.objects.order_by('username'),
+        'users':       users,
+        'filtered_group_ids': filtered_group_ids,
         'user_group_ids': user_group_ids,
         'editable_total': editable_total,
         'batch_updated': _batch_int('batch_updated'),
@@ -540,6 +567,7 @@ def component_detail(request, pk):
         'can_add_instance': can_add_instance,
         'can_edit_properties': can_edit_properties,
         'can_transfer_owner': can_transfer_owner,
+        'alternate_name_max': Component._meta.get_field('alternate_name').max_length,
         'group_members':    group_members,
         'locations':        Location.item_locations(),
         'form_error':      form_error,
@@ -679,6 +707,67 @@ def component_instance_create(request, pk):
         )
         return redirect('inventory-detail', pk=instance.pk)
 
+    return redirect('component-detail', pk=comp.pk)
+
+
+@login_required
+def component_update_details(request, pk):
+    """Save the editable fields of the Details card on the component detail
+    page in one go: alternate name, description and current owner. Only
+    fields present in the POST are touched. Authorization is the same for
+    all three (and as component_transfer_owner / property editing): member
+    of the component's owner_group, or a superuser -- 403 otherwise. The new
+    owner must be a member of the owner_group or a superuser; anything else
+    is silently ignored (business-rule violation, not an authz breach).
+    Each real change is written to the component's activity log."""
+    comp = get_object_or_404(Component, pk=pk)
+    user_group_ids = set(request.user.groups.values_list('id', flat=True))
+    if not ((bool(comp.owner_group_id) and comp.owner_group_id in user_group_ids)
+            or request.user.is_superuser):
+        return HttpResponseForbidden("You don't have permission to edit this component.")
+    if request.method != 'POST':
+        return redirect('component-detail', pk=comp.pk)
+
+    actor = request.user.get_full_name() or request.user.username
+    notes = []
+
+    if 'alternate_name' in request.POST:
+        new = request.POST['alternate_name'].strip()
+        max_len = Component._meta.get_field('alternate_name').max_length
+        if (not max_len or len(new) <= max_len) and new != comp.alternate_name:
+            notes.append(f"Alternate name of {comp.name} changed from "
+                         f"{comp.alternate_name or '(none)'} to {new or '(none)'} by {actor}.")
+            comp.alternate_name = new
+
+    if 'description' in request.POST:
+        new = request.POST['description'].strip()
+        if new != comp.description:
+            notes.append(f"Description of {comp.name} updated by {actor}.")
+            comp.description = new
+
+    if 'owner_user' in request.POST:
+        new_owner_id = _to_pk_int(request.POST.get('owner_user'))
+        valid_q = Q(is_superuser=True)
+        if comp.owner_group_id:
+            valid_q |= Q(groups=comp.owner_group_id)
+        if (new_owner_id is not None and new_owner_id != comp.owner_user_id
+                and User.objects.filter(valid_q, pk=new_owner_id).exists()):
+            old_owner = comp.owner_user
+            new_owner = User.objects.get(pk=new_owner_id)
+            notes.append(
+                f"Ownership of {comp.name} transferred from "
+                f"{old_owner.get_full_name() or old_owner.username if old_owner else 'unassigned'} to "
+                f"{new_owner.get_full_name() or new_owner.username} by {actor}.")
+            comp.owner_user = new_owner
+
+    if notes:
+        with transaction.atomic():
+            comp.save()
+            LogEntry.objects.bulk_create([
+                LogEntry(id=str(uuid.uuid4()), component=comp, topic='other',
+                         logged_by=request.user, entry=n)
+                for n in notes
+            ])
     return redirect('component-detail', pk=comp.pk)
 
 

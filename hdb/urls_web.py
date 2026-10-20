@@ -22,6 +22,8 @@ urlpatterns = [
                                        views_web.component_property_update, name="component-property-update"),
     path("components/<str:pk>/instances/create/",
                                        views_web.component_instance_create, name="component-instance-create"),
+    path("components/<str:pk>/details/",
+                                       views_web.component_update_details, name="component-details-update"),
     path("components/<str:pk>/transfer-owner/",
                                        views_web.component_transfer_owner, name="component-transfer-owner"),
     path("inventory/",                views_web.inventory_list,   name="inventory-list"),
