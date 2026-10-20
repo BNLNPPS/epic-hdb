@@ -299,6 +299,7 @@ class LogEntry(models.Model):
         ("",             "General"),
         ("installation", "Installation"),
         ("inventory",    "Inventory"),
+        ("components",   "Components"),
         ("design",       "Design"),
         ("maintenance",  "Maintenance"),
         ("inspection",   "Inspection"),

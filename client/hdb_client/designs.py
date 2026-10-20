@@ -254,7 +254,7 @@ class DesignClient:
         if created:
             m.LogEntry.objects.create(
                 component=component,
-                topic="other",
+                topic="components",
                 logged_by=self.user if getattr(self.user, "pk", None) else None,
                 entry=f"Component {component.name} created by hdb client (design import).",
             )

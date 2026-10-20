@@ -380,7 +380,7 @@ def component_list(request):
             )
             LogEntry.objects.create(
                 component=comp,
-                topic='other',
+                topic='components',
                 logged_by=request.user,
                 entry=(
                     f"Component {comp.name} created by "
@@ -790,7 +790,7 @@ def component_update_details(request, pk):
         with transaction.atomic():
             comp.save()
             LogEntry.objects.bulk_create([
-                LogEntry(id=str(uuid.uuid4()), component=comp, topic='other',
+                LogEntry(id=str(uuid.uuid4()), component=comp, topic='components',
                          logged_by=request.user, entry=n)
                 for n in notes
             ])
@@ -834,7 +834,7 @@ def component_transfer_owner(request, pk):
                 comp.save()
                 LogEntry.objects.create(
                     component=comp,
-                    topic='other',
+                    topic='components',
                     logged_by=request.user,
                     entry=(
                         f"Ownership of {comp.name} transferred from "
@@ -885,7 +885,7 @@ def component_batch_update_owner(request):
                 LogEntry(
                     id=str(uuid.uuid4()),
                     component=comp,
-                    topic='other',
+                    topic='components',
                     logged_by=request.user,
                     entry=(
                         f"Ownership of {comp.name} transferred from "

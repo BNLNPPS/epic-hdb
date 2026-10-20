@@ -925,6 +925,7 @@ class CreationLogging(Base):
         c = Component.objects.get(name="Newc")
         e = c.log_entries.get()
         self.assertIn("created by", e.entry)
+        self.assertEqual(e.topic, "components")
         self.assertEqual(e.logged_by, admin)
 
     def test_inventory_creation_logged_both_paths(self):
@@ -963,3 +964,15 @@ class ComponentOwnerFilter(Base):
         self.assertEqual(Component.objects.get(name="Mine").owner_user, u2)
         self.comp.refresh_from_db()
         self.assertIsNone(self.comp.owner_user)
+
+
+class ComponentLogTopic(Base):
+    def test_edits_and_transfers_use_components_topic(self):
+        u2 = User.objects.create_user("u2", password="x"); u2.groups.add(self.group)
+        self.client.post(reverse("component-details-update", args=[self.comp.pk]),
+                         {"alternate_name": "A", "owner_user": u2.pk})
+        self.client.post(reverse("component-batch-owner"),
+                         {"components": [self.comp.pk], "target_owner": self.user.pk})
+        topics = set(self.comp.log_entries.values_list("topic", flat=True))
+        self.assertEqual(topics, {"components"})
+        self.assertEqual(self.comp.log_entries.count(), 3)
