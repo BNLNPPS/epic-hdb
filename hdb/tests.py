@@ -976,3 +976,133 @@ class ComponentLogTopic(Base):
         topics = set(self.comp.log_entries.values_list("topic", flat=True))
         self.assertEqual(topics, {"components"})
         self.assertEqual(self.comp.log_entries.count(), 3)
+
+
+class AdminGroupEditing(Base):
+    def setUp(self):
+        self.admin = User.objects.create_superuser("adm3", password="x")
+        self.client.force_login(self.admin)
+        self.h = Group.objects.create(name="H")
+
+    def test_group_editable_on_change_forms(self):
+        i = self.instance()
+        for url in (reverse("admin:hdb_component_change", args=[self.comp.pk]),
+                    reverse("admin:hdb_componentinstance_change", args=[i.pk])):
+            r = self.client.get(url)
+            self.assertContains(r, 'name="owner_group"')
+            # in the main (non-collapsed) part of the form
+            html = r.content.decode()
+            self.assertLess(html.index('name="owner_group"'), html.index("Ownership"))
+
+    def test_group_editable_in_changelists(self):
+        i = self.instance()
+        for name in ("component", "componentinstance"):
+            r = self.client.get(reverse(f"admin:hdb_{name}_changelist"))
+            self.assertContains(r, 'name="form-0-owner_group"')
+
+
+class AdminGroupChangeLogged(Base):
+    def setUp(self):
+        self.admin = User.objects.create_superuser("adm4", password="x")
+        self.client.force_login(self.admin)
+        self.h = Group.objects.create(name="H")
+
+    def _form(self, url, obj_fields):
+        return self.client.post(url, obj_fields)
+
+    def test_changelist_edit_logged_for_component_and_instance(self):
+        i = self.instance()
+        r = self.client.post(reverse("admin:hdb_component_changelist"), {
+            "form-TOTAL_FORMS": "1", "form-INITIAL_FORMS": "1", "form-MIN_NUM_FORMS": "0",
+            "form-MAX_NUM_FORMS": "1000", "form-0-id": self.comp.pk,
+            "form-0-owner_group": self.h.pk, "_save": "Save"})
+        self.comp.refresh_from_db()
+        self.assertEqual(self.comp.owner_group, self.h)
+        e = self.comp.log_entries.get()
+        self.assertEqual(e.topic, "components")
+        self.assertIn("from G to H", e.entry)
+        self.client.post(reverse("admin:hdb_componentinstance_changelist"), {
+            "form-TOTAL_FORMS": "1", "form-INITIAL_FORMS": "1", "form-MIN_NUM_FORMS": "0",
+            "form-MAX_NUM_FORMS": "1000", "form-0-id": i.pk,
+            "form-0-owner_group": self.h.pk, "_save": "Save"})
+        i.refresh_from_db()
+        self.assertEqual(i.owner_group, self.h)
+        e = i.log_entries.get()
+        self.assertEqual(e.topic, "inventory")
+        self.assertIn("(admin)", e.entry)
+
+    def test_unchanged_group_not_logged(self):
+        self.client.post(reverse("admin:hdb_component_changelist"), {
+            "form-TOTAL_FORMS": "1", "form-INITIAL_FORMS": "1", "form-MIN_NUM_FORMS": "0",
+            "form-MAX_NUM_FORMS": "1000", "form-0-id": self.comp.pk,
+            "form-0-owner_group": self.group.pk, "_save": "Save"})
+        self.assertEqual(self.comp.log_entries.count(), 0)
+
+
+class UserCreationLogged(Base):
+    def test_admin_user_creation_is_logged(self):
+        admin = User.objects.create_superuser("adm5", password="x")
+        self.client.force_login(admin)
+        self.client.post(reverse("admin:auth_user_add"), {
+            "username": "newbie", "usable_password": "true", "profile-TOTAL_FORMS": "0", "profile-INITIAL_FORMS": "0", "profile-MIN_NUM_FORMS": "0", "profile-MAX_NUM_FORMS": "1", "password1": "S3cure-pass-xyz", "password2": "S3cure-pass-xyz"})
+        self.assertTrue(User.objects.filter(username="newbie").exists())
+        from .models import LogEntry
+        e = LogEntry.objects.get(entry__startswith="User newbie created")
+        self.assertEqual(e.logged_by, admin)
+        self.assertEqual(e.topic, "user")
+        # editing the user afterwards doesn't log another creation
+        u = User.objects.get(username="newbie")
+        self.assertEqual(LogEntry.objects.filter(entry__startswith="User newbie created").count(), 1)
+
+
+class UserDeletionLogged(Base):
+    def test_single_and_bulk_deletion_logged(self):
+        from .models import LogEntry
+        admin = User.objects.create_superuser("adm6", password="x")
+        self.client.force_login(admin)
+        a = User.objects.create_user("gone1", password="x")
+        b = User.objects.create_user("gone2", password="x")
+        c = User.objects.create_user("gone3", password="x")
+        self.client.post(reverse("admin:auth_user_delete", args=[a.pk]), {"post": "yes"})
+        self.client.post(reverse("admin:auth_user_changelist"), {
+            "action": "delete_selected", "_selected_action": [b.pk, c.pk], "post": "yes"})
+        self.assertFalse(User.objects.filter(username__startswith="gone").exists())
+        names = sorted(e.entry.split()[1] for e in LogEntry.objects.filter(topic="user", entry__contains="deleted by"))
+        self.assertEqual(names, ["gone1", "gone2", "gone3"])
+        self.assertEqual(LogEntry.objects.filter(topic="user").first().logged_by, admin)
+
+
+class UserDeletionProtected(Base):
+    def setUp(self):
+        self.admin = User.objects.create_superuser("adm7", password="x")
+        self.client.force_login(self.admin)
+
+    def test_owner_cannot_be_deleted_in_admin(self):
+        victim = User.objects.create_user("owner1", password="x")
+        Component.objects.create(name="OwnedC", owner_group=self.group, owner_user=victim)
+        r = self.client.get(reverse("admin:auth_user_delete", args=[victim.pk]))
+        self.assertContains(r, "owns 1 components: OwnedC")
+        self.assertNotContains(r, 'name="post"')
+        self.client.post(reverse("admin:auth_user_delete", args=[victim.pk]), {"post": "yes"})
+        self.assertTrue(User.objects.filter(pk=victim.pk).exists())
+        from .models import LogEntry
+        self.assertFalse(LogEntry.objects.filter(entry__contains="User owner1 deleted").exists())
+
+    def test_bulk_action_blocked_too(self):
+        victim = User.objects.create_user("owner2", password="x")
+        self.design("OwnedD").__class__.objects.filter(name="OwnedD").update(owner_user=victim)
+        self.client.post(reverse("admin:auth_user_changelist"), {
+            "action": "delete_selected", "_selected_action": [victim.pk], "post": "yes"})
+        self.assertTrue(User.objects.filter(pk=victim.pk).exists())
+
+    def test_model_level_guard_and_free_user_deletable(self):
+        from django.db.models import ProtectedError
+        victim = User.objects.create_user("owner3", password="x")
+        i = self.instance("IT")
+        ComponentInstance.objects.filter(pk=i.pk).update(owner_user=victim)
+        from django.db import transaction
+        with self.assertRaises(ProtectedError), transaction.atomic():
+            victim.delete()
+        ComponentInstance.objects.filter(pk=i.pk).update(owner_user=self.user)
+        victim.delete()
+        self.assertFalse(User.objects.filter(pk=victim.pk).exists())

@@ -300,6 +300,7 @@ class LogEntry(models.Model):
         ("installation", "Installation"),
         ("inventory",    "Inventory"),
         ("components",   "Components"),
+        ("user",         "User"),
         ("design",       "Design"),
         ("maintenance",  "Maintenance"),
         ("inspection",   "Inspection"),
@@ -1154,3 +1155,42 @@ class UserProfile(models.Model):
     def __str__(self):
         inst = str(self.institution) if self.institution else '—'
         return f"{self.user.username} @ {inst}"
+
+
+# ---------------------------------------------------------------------------
+# User deletion guard
+# ---------------------------------------------------------------------------
+
+def user_owned_objects(user):
+    """Everything that still names `user` as its owner_user, as a list of
+    (label, queryset) pairs with at least one row -- used by the delete guard
+    below and by the admin's delete confirmation page."""
+    out = []
+    for label, model in (
+        ("Components",         Component),
+        ("Component instances", ComponentInstance),
+        ("Design templates",   DesignTemplate),
+        ("Designs",            Design),
+    ):
+        qs = model.objects.filter(owner_user=user)
+        if qs.exists():
+            out.append((label, qs))
+    return out
+
+
+from django.db.models import ProtectedError  # noqa: E402
+from django.db.models.signals import pre_delete  # noqa: E402
+from django.dispatch import receiver  # noqa: E402
+
+
+@receiver(pre_delete, sender=User, dispatch_uid="hdb_protect_owning_user")
+def _protect_owning_user(sender, instance, **kwargs):
+    """A user who still owns catalog objects can't be deleted (the FKs are
+    SET_NULL, which would silently orphan them). Reassign the objects first."""
+    owned = user_owned_objects(instance)
+    if owned:
+        summary = ", ".join(f"{qs.count()} {label.lower()}" for label, qs in owned)
+        raise ProtectedError(
+            f"User {instance.username} still owns {summary}; reassign them first.",
+            [o for _, qs in owned for o in qs[:5]],
+        )
