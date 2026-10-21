@@ -5,6 +5,21 @@ Database User Guide* (Argonne National Laboratory). The Hardware Database is the
 candidate central repository for documenting, organizing, and tracking components used
 in ePIC and EIC project.
 
+Salient features:
+
+* Inventory items are created based on the descirption in the _Component Catalog_
+* Location and custody of each items is managed
+* Locations are described as a hierarchy of the following
+  1. Insitution
+  2. Building
+  3. Room
+  4. Cabinet
+  5. Shelf
+* Roles: all items are categorized based on _Groups_ and _Systems_, the latter providing a more detailed level of granularity
+* Users can be members of multiple groups. Any operations on the catalog and inventory items owned by a Group are limited to members of that group.
+* The Database supports complex entities (assemblies), termed _Designs_.
+* Designs are based on _Templates_ and become complete units once all elements inside the template are populated with inventory items.
+
 ---
 
 ## Table of Contents
