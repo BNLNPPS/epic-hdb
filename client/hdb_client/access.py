@@ -56,7 +56,8 @@ def can_write(obj, user: User | None) -> bool:
         return False
     if user.is_superuser or user.is_staff:
         return True
-    if obj.owner_user_id and obj.owner_user_id == user.id:
+    owner_user_id = getattr(obj, "owner_user_id", None)  # DesignTemplate has none
+    if owner_user_id and owner_user_id == user.id:
         return True
     if obj.owner_group_id and obj.group_writeable:
         return user.groups.filter(pk=obj.owner_group_id).exists()

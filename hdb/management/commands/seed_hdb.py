@@ -1,6 +1,6 @@
 """
 Management command: python manage.py seed_hdb
-Populates the HDB with the BEMC / BTOF sample dataset.
+Populates the HDB with the BEMC / BTOF / DAQ sample dataset (spec: CLAUDE.md, "seed_hdb").
 
 Kept in sync with the current hdb/models.py schema -- it only touches
 fields and models that actually exist there. In particular:
@@ -51,7 +51,7 @@ from hdb_client import HDBClient  # noqa: E402  (must follow the sys.path insert
 
 
 class Command(BaseCommand):
-    help = "Seed the HDB with the BEMC/BTOF sample dataset"
+    help = "Seed the HDB with the BEMC/BTOF/DAQ sample dataset"
 
     def add_arguments(self, parser):
         parser.add_argument(
@@ -74,7 +74,7 @@ class Command(BaseCommand):
 
         # Groups
         grp = {}
-        for n in ["BEMC", "BTOF", "PFRICH"]:
+        for n in ["BEMC", "BTOF", "PFRICH", "DAQ", "ADMIN"]:
             g, _ = Group.objects.get_or_create(name=n)
             grp[n] = g
 
@@ -104,31 +104,21 @@ class Command(BaseCommand):
                 u.groups.set([grp[g] for g in groups])
             return u
 
-        mkuser("admin", is_staff=True, is_superuser=True)
-        maxim = mkuser("maxim", is_staff=True, is_superuser=True,
+        admin = mkuser("admin", is_staff=True, is_superuser=True, groups=["ADMIN"],
+                       first_name="Maxim", last_name="Potekhin")
+        maxim = mkuser("maxim", is_staff=True, is_superuser=True, groups=["ADMIN"],
                         first_name="Maxim", last_name="Potekhin", email="potekhin@bnl.gov")
-        ottjenni = mkuser("ottjenni", groups=["BTOF"],
-                           first_name="Jennifer", last_name="Ott",
-                           email="ottjenni@hawaii.edu")
         gnigmat = mkuser("gnigmat", groups=["BTOF"],
                           first_name="Grigory", last_name="Nigmatkulov",
                           email="gnigmat@uic.edu")
         crafts  = mkuser("crafts",  groups=["BEMC"],
-                          first_name="Casey", last_name="Crafts",
+                          first_name="Josh", last_name="Crafts",
                           email="crafts@cua.edu")
+        arkhipkin = mkuser("arkhipkin", groups=["DAQ"],
+                            first_name="Dmitry", last_name="Arkhipkin")
         ullrich = mkuser("ullrich", groups=["BEMC", "BTOF"],
                           first_name="Thomas", last_name="Ullrich",
                           email="thomas.ullrich@bnl.gov")
-        # PFRICH: pfRICH (proximity-focusing RICH) detector developers,
-        # both BNL -- confirmed via public ePIC/pfRICH meeting agendas and
-        # talks on indico.bnl.gov (pfRICH kick-off meeting, general
-        # meetings, CDR, and DAC status updates).
-        bpage = mkuser("bpage", groups=["PFRICH"],
-                        first_name="Brian", last_name="Page",
-                        email="bpage@bnl.gov")
-        ayk = mkuser("ayk", groups=["PFRICH"],
-                      first_name="Alexander", last_name="Kiselev",
-                      email="ayk@bnl.gov")
 
         # Technical systems, each owned by a responsible group
         ts = {}
@@ -137,7 +127,7 @@ class Command(BaseCommand):
             ("BEMC-PM",       "BEMC"),
             ("BTOF-Sensor",   "BTOF"),
             ("BTOF-Readout",  "BTOF"),
-            ("PFRICH-HRPPD",  "PFRICH"),
+            ("DAQ-Servers",   "DAQ"),
         ]:
             o, _ = TechnicalSystem.objects.get_or_create(
                 name=n, defaults={"group": grp[group_name]}
@@ -160,34 +150,31 @@ class Command(BaseCommand):
             defaults={"abbreviation": "BNL", "country": "USA", "city": "Upton, NY",
                       "url": "https://www.bnl.gov"},
         )
-        hawaii, _ = Institution.objects.get_or_create(
-            name="University of Hawaii",
-            defaults={"abbreviation": "UH", "country": "USA", "city": "Honolulu, HI",
-                      "url": "https://www.hawaii.edu"},
-        )
 
-        # Rooms must sit in a building (see Location.validate_hierarchy).
-        cua_bldg, _ = Location.objects.get_or_create(
-            name="Main Building", location_type="building", institution=cua,
-        )
-        uic_bldg, _ = Location.objects.get_or_create(
-            name="Main Building", location_type="building", institution=uic,
-        )
-        storage_room, _ = Location.objects.get_or_create(
-            name="Storage Room", location_type="room", institution=cua,
-            defaults={"parent": cua_bldg},
-        )
-        test_lab, _ = Location.objects.get_or_create(
-            name="Test Lab", location_type="room", institution=uic,
-            defaults={"parent": uic_bldg},
-        )
-        bldg_510a, _ = Location.objects.get_or_create(
-            name="Bldg.510A", location_type="building", institution=bnl,
-        )
+        # Only rooms (and cabinets/shelves inside them) are valid homes for
+        # inventory; a building is just the parent a room must sit in.
+        # Inventory items may not have a blank location.
+        def mkbldg(name, inst):
+            return Location.objects.get_or_create(
+                name=name, location_type="building", institution=inst)[0]
+
+        def mkroom(name, bldg, inst):
+            return Location.objects.get_or_create(
+                name=name, location_type="room", institution=inst,
+                defaults={"parent": bldg})[0]
+
+        cua_bldg = mkbldg("Main Building", cua)
+        uic_bldg = mkbldg("Main Building", uic)
+        bnl_bldg = mkbldg("Bldg.510A", bnl)
+        storage_room     = mkroom("Storage Room", cua_bldg, cua)   # CUA
+        test_lab         = mkroom("Test Lab",     uic_bldg, uic)   # UIC
+        bnl_test_lab     = mkroom("Test Lab",     bnl_bldg, bnl)
+        bnl_storage_room = mkroom("Storage Room", bnl_bldg, bnl)
+        bnl_server_room  = mkroom("Server Room",  bnl_bldg, bnl)
 
         # Link each user to their home institution.
-        for user, inst in [(crafts, cua), (gnigmat, uic), (ullrich, bnl), (maxim, bnl), (ottjenni, hawaii),
-                           (bpage, bnl), (ayk, bnl)]:
+        for user, inst in [(crafts, cua), (gnigmat, uic), (ullrich, bnl), (maxim, bnl),
+                           (admin, bnl), (arkhipkin, bnl)]:
             UserProfile.objects.get_or_create(user=user, defaults={"institution": inst})
 
         # Components  (Component has no "function" field -- the functional
@@ -220,8 +207,14 @@ class Command(BaseCommand):
             "BTOF-Readout", "BTOF", gnigmat,
         )
 
+        daq_server = mkcomp(
+            "DAQ server", "DAQ-SRV-01",
+            "Data acquisition server.",
+            "DAQ-Servers", "DAQ", arkhipkin,
+        )
+
         # Component instances -- 2 to 5 per component, spread across the
-        # two locations. Identified by tag (unique per component), not by
+        # rooms. Identified by tag (unique per component), not by
         # any qr_id field.
         def mkinst(tag, comp, loc, owner, group_name, serial=""):
             i, _ = ComponentInstance.objects.get_or_create(tag=tag, component=comp, defaults=dict(
@@ -231,7 +224,7 @@ class Command(BaseCommand):
 
         crystal_instances = []
         for i in range(1, 4):  # 3 instances
-            loc = storage_room if i % 2 else test_lab
+            loc = (storage_room, test_lab, bnl_storage_room)[(i - 1) % 3]
             crystal_instances.append(
                 mkinst(f"BEMC-CRYSTAL-{i:03d}", crystal, loc, crafts, "BEMC", f"PWO-{i:04d}")
             )
@@ -240,19 +233,17 @@ class Command(BaseCommand):
             loc = storage_room if i % 2 else test_lab
             mkinst(f"BEMC-PM-{i:03d}", pm, loc, crafts, "BEMC", f"HAM-{i:04d}")
 
-        # 12 additional Hamamatsu units, all delivered to CUA / Storage Room --
-        # same tag/serial pattern as the first four (BEMC-PM-NNN / HAM-NNNN),
-        # just continuing the numbering upward.
-        for i in range(5, 17):  # 12 more instances
-            mkinst(f"BEMC-PM-{i:03d}", pm, storage_room, crafts, "BEMC", f"HAM-{i:04d}")
-
         for i in range(1, 3):  # 2 instances
-            loc = test_lab if i % 2 else storage_room
+            loc = test_lab if i % 2 else bnl_test_lab
             mkinst(f"BTOF-SENSOR-{i:03d}", sensor, loc, gnigmat, "BTOF", f"LGAD-{i:04d}")
 
         for i in range(1, 6):  # 5 instances
-            loc = test_lab if i % 2 else storage_room
+            loc = test_lab if i % 2 else bnl_test_lab
             mkinst(f"BTOF-READOUT-{i:03d}", readout, loc, gnigmat, "BTOF", f"FCFD-{i:04d}")
+
+        for i in range(1, 4):  # 3 instances
+            mkinst(f"DAQ-SERVER-{i:03d}", daq_server, bnl_server_room,
+                   arkhipkin, "DAQ", f"DAQSRV-{i:04d}")
 
         # Property types + a couple of example values, to demonstrate
         # component -> instance property inheritance (and overriding).
@@ -382,20 +373,43 @@ class Command(BaseCommand):
         # clobbers an existing template's structure (get_or_create
         # throughout the loader too) -- it just re-stamps provenance to
         # reflect this load, same as any other `load-template` run.
-        design_client = HDBClient(user=crafts).designs
-        for yaml_name in [
-            "bemc_tower_template.yaml",
+        # Each file is loaded as the user who owns that subsystem, so
+        # created_by is right: BEMC as crafts, BTOF as gnigmat.
+        for owner_user, yaml_names in [
+            (crafts, ["bemc_tower_template.yaml"]),
             # BTOF hierarchy -- split one-template-per-file, see
             # data/btof_split/README.md; order doesn't matter (uploads
             # are asynchronous/order-independent), listed leaf-first here
             # only because that's the traditional reading order.
-            os.path.join("btof_split", "btof_stavelet.yaml"),
-            os.path.join("btof_split", "btof_half_stave.yaml"),
-            os.path.join("btof_split", "btof_stave.yaml"),
+            (gnigmat, [os.path.join("btof_split", "btof_stavelet.yaml"),
+                       os.path.join("btof_split", "btof_half_stave.yaml"),
+                       os.path.join("btof_split", "btof_stave.yaml")]),
         ]:
-            design_client.load_templates_from_yaml(
-                str(settings.BASE_DIR / "data" / yaml_name)
-            )
+            design_client = HDBClient(user=owner_user).designs
+            for yaml_name in yaml_names:
+                design_client.load_templates_from_yaml(
+                    str(settings.BASE_DIR / "data" / yaml_name)
+                )
+
+        # Every BTOF-related catalog component belongs to group BTOF and is
+        # owned by gnigmat: the ones above, plus those the BTOF template
+        # YAMLs create on the fly (the loader only sets owner_group, from
+        # the technical system, and sets no owner_user). "BTOF-related" =
+        # used by, or the product of, any BTOF-owned template, or sitting
+        # in a BTOF-* technical system. Forced on every run, so a stale
+        # owner is corrected on re-seed.
+        btof_templates = DesignTemplate.objects.filter(owner_group=grp["BTOF"])
+        btof_comp_ids = set(
+            Component.objects.filter(template_memberships__template__in=btof_templates)
+            .values_list("pk", flat=True))
+        btof_comp_ids |= set(
+            btof_templates.exclude(product_component=None)
+            .values_list("product_component", flat=True))
+        btof_comp_ids |= set(
+            Component.objects.filter(technical_system__name__startswith="BTOF")
+            .values_list("pk", flat=True))
+        Component.objects.filter(pk__in=btof_comp_ids).update(
+            owner_group=grp["BTOF"], owner_user=gnigmat)
 
         tower_tpl = DesignTemplate.objects.get(name="BEMC tower")
 
@@ -455,7 +469,7 @@ class Command(BaseCommand):
 
         self.stdout.write(self.style.SUCCESS(
             f"\nDone.  admin/admin, maxim/maxim | "
-            f"Groups:{Group.objects.filter(name__in=['BEMC','BTOF','PFRICH']).count()}  "
+            f"Groups:{Group.objects.filter(name__in=['BEMC','BTOF','PFRICH','DAQ','ADMIN']).count()}  "
             f"Systems:{TechnicalSystem.objects.count()}  "
             f"Components:{Component.objects.count()}  "
             f"Instances:{ComponentInstance.objects.count()}  "

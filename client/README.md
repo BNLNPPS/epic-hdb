@@ -309,10 +309,12 @@ client.designs.create_template(name=..., project="ePIC", description=..., elemen
 components are never modified or duplicated, only what's missing gets
 created (`get_or_create` throughout, matching `seed_hdb.py`'s convention).
 This is a curator/administrative operation, like `seed_hdb`, not a
-per-request scoped write — `owner_group_name`/`owner_username` (or the
-YAML's `owner_group`/`owner_user`) are recorded on the template if given, but
-there's no requirement that the acting user belong to that group (unlike
-`inventory.create()`).
+per-request scoped write — `owner_group_name` (or the YAML's `owner_group`)
+is recorded on the template if given, but there's no requirement that the
+acting user belong to that group (unlike `inventory.create()`). Templates
+have **no individual owner**: a YAML `owner_user` key is rejected with an
+error, and the user who instantiates a template becomes the `owner_user` of
+the resulting Design.
 
 **Loading order doesn't matter.** A `child_template` element doesn't have
 to already exist — uploads are asynchronous, so a parent's file can be
@@ -337,8 +339,7 @@ templates:
   - template:
       name: "BTOF Stavelet"
       project: "ePIC"           # default "ePIC"
-      owner_group: BTOF          # optional Group name
-      owner_user: crafts         # optional Django username
+      owner_group: BTOF          # optional Group name (no owner_user -- rejected)
       description: "..."
       product_component:         # optional -- catalog Component for one
         name: "BTOF Stavelet"    # physically completed instance of this

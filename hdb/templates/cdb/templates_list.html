@@ -67,7 +67,6 @@ dialog.modal::backdrop { background: rgba(20,23,34,.45); }
         <th>Placeholders</th>
         <th>Designs Created</th>
         <th>Owner Group</th>
-        <th>Owner</th>
         <th>Description</th>
       </tr>
     </thead>
@@ -78,11 +77,10 @@ dialog.modal::backdrop { background: rgba(20,23,34,.45); }
         <td>{{ tpl.placeholder_count }}</td>
         <td>{{ tpl.design_count }}</td>
         <td>{% if tpl.owner_group %}<span class="tag gray">{{ tpl.owner_group }}</span>{% else %}—{% endif %}</td>
-        <td style="font-size:12.5px">{% if tpl.owner_user %}{{ tpl.owner_user.get_full_name|default:tpl.owner_user.username }}{% else %}—{% endif %}</td>
         <td style="color:var(--muted);font-size:12.5px">{{ tpl.description|truncatechars:60 }}</td>
       </tr>
       {% empty %}
-      <tr><td colspan="6"><div class="empty">No templates found{% if q %} for "{{ q }}"{% endif %}{% if group %} in group "{{ group }}"{% endif %}</div></td></tr>
+      <tr><td colspan="5"><div class="empty">No templates found{% if q %} for "{{ q }}"{% endif %}{% if group %} in group "{{ group }}"{% endif %}</div></td></tr>
       {% endfor %}
     </tbody>
   </table>

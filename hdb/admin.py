@@ -207,7 +207,7 @@ class DesignTemplateAdmin(admin.ModelAdmin):
     inlines         = [DesignTemplateElementInline]
     fieldsets = (
         ("Identity",  {"fields": ("pk", "name", "description", "project", "nesting_levels", "product_component")}),
-        ("Ownership", {"fields": ("owner_user", "owner_group", "group_writeable", "created_by", "created_on", "modified_by", "modified_on"), "classes": ("collapse",)}),
+        ("Ownership", {"fields": ("owner_group", "group_writeable", "created_by", "created_on", "modified_by", "modified_on"), "classes": ("collapse",)}),
         ("Source Provenance", {"fields": ("source_path", "source_sha256", "source_git_commit"), "classes": ("collapse",)}),
     )
 

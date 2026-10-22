@@ -305,7 +305,7 @@ just a UI check.
 | `description` | Free-text |
 | `project` | e.g. `ePIC` |
 | `product_component` | FK → `Component`, nullable — the catalog entry for one physically completed instance of this template's assembly (e.g. the "BTOF Stavelet" template's `product_component` is the "BTOF Stavelet" `Component`), so it can be tracked as inventory once built. Independent of nesting — see below. |
-| *(OwnedModel)* | Ownership + timestamps |
+| *(OwnedModel, minus `owner_user`)* | Group ownership (`owner_group`, `group_writeable`) + audit timestamps. **No individual owner** — see [Ownership](#ownership). |
 | `nesting_levels` | Computed property, not a DB column — depth of nested sub-templates beneath this one (1 = flat, every placeholder a leaf component) |
 
 **`DesignTemplateElement`** — one placeholder line.
@@ -492,7 +492,10 @@ Django admin or direct ORM/client access.
 
 Every domain model that can be written to (`Component`, `ComponentInstance`,
 `Design`, `DesignTemplate`) inherits from the abstract `OwnedModel`, which
-supplies:
+supplies the fields below. **`DesignTemplate` is the one exception: it has no
+`owner_user`** (the inherited field is removed) — a template belongs to its
+`owner_group` only, and the user who instantiates it becomes the `owner_user`
+of the resulting `Design`.
 
 | Field | Description |
 |-------|-------------|
@@ -584,7 +587,7 @@ client.designs.bom("BEMC tower")
 client.designs.template_bom("BTOF Stave")   # see Domain 3 above for what this recurses through
 ```
 
-`HDBClient` aggregates six sub-clients (`locations`, `systems`, `catalog`,
+`HDBClient` aggregates five sub-clients (`locations`, `systems`, `catalog`,
 `inventory`, `designs`) plus the two cross-domain helpers shown above.
 
 **For the complete method-by-method reference, the CLI command list

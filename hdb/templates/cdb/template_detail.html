@@ -201,12 +201,6 @@
         <div class="field-value"><span class="tag gray">{{ template.owner_group }}</span></div>
       </div>
       {% endif %}
-      {% if template.owner_user %}
-      <div class="field-group">
-        <div class="field-label">Owner</div>
-        <div class="field-value">{{ template.owner_user.get_full_name|default:template.owner_user.username }}</div>
-      </div>
-      {% endif %}
       <div class="field-group">
         <div class="field-label">Project</div>
         <div class="field-value">{{ template.project|default:"—" }}</div>

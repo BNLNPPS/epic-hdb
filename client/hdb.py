@@ -25,6 +25,8 @@ Commands
   bom-template   <NAME>         Recursive parts explosion for a template
   subsystem-hash <NAME>         Composite fingerprint over a template and everything beneath it
   delete-template <NAME>        Delete an unlocked DesignTemplate (superuser-only)
+  nuke-database                 Wipe ALL data, back to an empty database (superuser
+                                password required; interactive only)
 
 Options
 -------
@@ -460,6 +462,98 @@ def cmd_delete_template(client, args):
     print(f"Deleted template {result['template']!r}.")
 
 
+def cmd_nuke_database(client, args):
+    """Reset the database to its initial, empty state -- ALL rows in ALL
+    tables, users and groups included. The schema/migrations are kept.
+
+    Safeguards: interactive terminal only (no --yes, no piping); the operator
+    must authenticate with a Django superuser's username and password (the
+    --user flag only pre-fills the username, it is never trusted on its own);
+    and must type a confirmation phrase naming the exact database. For
+    SQLite, the file is copied aside first unless --no-backup is given.
+
+    Afterwards, re-populate with `python manage.py seed_hdb` (dev) or
+    `python manage.py createsuperuser` (production -- nobody can log in
+    until you do).
+
+    Example
+    -------
+      bin/hdb nuke-database
+      bin/hdb --user maxim nuke-database
+    """
+    import getpass
+    from hdb_client import maintenance as m
+
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+        print("Error: nuke-database must be run from an interactive terminal.",
+              file=sys.stderr)
+        sys.exit(1)
+
+    info = m.describe_database()
+    bar = "!" * 72
+    print(bar)
+    print("  DESTRUCTIVE OPERATION: COMPLETE DATABASE RESET")
+    print(bar)
+    print(f"  Database : {info['label']}  ({info['vendor']})")
+    counts = m.row_counts()
+    if counts:
+        print("  Will be permanently destroyed:")
+        for label, n in counts:
+            print(f"      {n:>7}  {label}")
+    else:
+        print("  The database is already empty.")
+    print("  Everything above -- including ALL user accounts, yours too -- will be")
+    print("  gone. Uploaded media files on disk are NOT touched. There is no undo.")
+    if info["sqlite_path"] and not args.no_backup:
+        print("  (A timestamped copy of the SQLite file will be made first.)")
+    elif not info["sqlite_path"]:
+        print(f"  This is a {info['vendor']} database and NO automatic backup is made.")
+        print("  Take a pg_dump first if there is any chance you need this data.")
+    print(bar)
+    print("First, prove you are an authorized superuser.")
+
+    operator = None
+    username = args.user
+    for attempt in range(3):
+        if not username:
+            username = input("Superuser username: ").strip()
+        password = getpass.getpass(f"Password for {username}: ")
+        try:
+            operator = m.authenticate_superuser(username, password)
+            break
+        except PermissionError as exc:
+            print(f"Denied: {exc}", file=sys.stderr)
+            if "not a superuser" in str(exc):
+                sys.exit(1)
+            username = None
+    if operator is None:
+        print("Too many failed attempts. Nothing was changed.", file=sys.stderr)
+        sys.exit(1)
+
+    print(f"\nAuthenticated as {operator.username}.")
+    print("To proceed, type the following phrase exactly (anything else aborts):")
+    print(f"\n    {info['phrase']}\n")
+    if input("> ").strip() != info["phrase"]:
+        print("Phrase did not match. Aborted; nothing was changed.")
+        return
+    if input("Last chance. Really erase everything? Type 'yes, erase it': ").strip() \
+            != "yes, erase it":
+        print("Aborted; nothing was changed.")
+        return
+
+    try:
+        if not args.no_backup:
+            bak = m.backup_sqlite(info)
+            if bak:
+                print(f"Backup written: {bak}")
+        m.reset_database(operator)
+    except Exception as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(1)
+    print("Database is now empty. Next: `python manage.py seed_hdb` "
+          "(or `createsuperuser` on production).")
+
+
 def cmd_find(client, args):
     """List items whose name (or tag) matches a glob wildcard pattern.
 
@@ -785,6 +879,11 @@ def build_parser():
     sp.add_argument("--yes", action="store_true",
                     help="Skip the confirmation prompt")
 
+    sp = sub.add_parser("nuke-database",
+                        help="Wipe ALL data (superuser password + typed confirmation required)")
+    sp.add_argument("--no-backup", action="store_true", dest="no_backup",
+                    help="Skip the automatic SQLite file copy")
+
     return p
 
 
@@ -808,6 +907,7 @@ COMMANDS = {
     "bom-template":  cmd_bom_template,
     "subsystem-hash": cmd_subsystem_hash,
     "delete-template": cmd_delete_template,
+    "nuke-database": cmd_nuke_database,
 }
 
 if __name__ == "__main__":

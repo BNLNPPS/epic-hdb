@@ -526,7 +526,10 @@ TEMPLATE_NESTING_MAX_DEPTH = 10
 
 class DesignTemplate(OwnedModel):
     """
-    Reusable blueprint for a Design. Template elements reference either a
+    Reusable blueprint for a Design. A template is owned by a GROUP only
+    (owner_group) -- it deliberately has no owner_user: nobody personally
+    owns a blueprint. The person who instantiates it becomes the owner_user
+    of the resulting Design (see _instantiate_design in views_web.py). Template elements reference either a
     catalog Component or another DesignTemplate as *placeholders* -- they
     say "this assembly needs 4 SiPMs" or "this assembly needs 144
     Half-Staves", not specific serialized items. When a user instantiates a
@@ -537,6 +540,10 @@ class DesignTemplate(OwnedModel):
     replace each leaf placeholder with an actual ComponentInstance from the
     inventory as the physical assembly is built.
     """
+    # Remove the inherited OwnedModel.owner_user column (Django abstract-field
+    # removal): templates are group-owned only.
+    owner_user = None
+
     id = models.CharField(max_length=36, primary_key=True, editable=False)
     name        = models.CharField(max_length=256, unique=True)
     description = models.TextField(blank=True)
@@ -1169,7 +1176,6 @@ def user_owned_objects(user):
     for label, model in (
         ("Components",         Component),
         ("Component instances", ComponentInstance),
-        ("Design templates",   DesignTemplate),
         ("Designs",            Design),
     ):
         qs = model.objects.filter(owner_user=user)

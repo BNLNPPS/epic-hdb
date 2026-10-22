@@ -13,29 +13,39 @@ The seed_hdb command should contain the following entities:
   * BEMC
   * BTOF
   * PFRICH
+  * DAQ
+  * ADMIN
 
 * Users:
-  * admin - superuser, staff
-  * maxim - superuser, staff
-  * gnigmat - user, belongs to groups: BTOF
-  * crafts - user, belongs to groups: BEMC
+  * admin - name: Maxim Potekhin; superuser, staff, belongs to groups: ADMIN
+  * maxim - name: Maxim Potekhin; superuser, staff, belongs to groups: ADMIN
+  * gnigmat - name: Grigory Nigmatkulov; user, belongs to groups: BTOF
+  * crafts - name: Josh Crafts; user, belongs to groups: BEMC
+  * arkhipkin - name: Dmitry Arkhipkin; user, belongs to groups: DAQ
+  * ullrich - name: Thomas Ullrich; user, belongs to groups: BEMC, BTOF
 
 * Technical systems:
   * BEMC-CRYSTAL, group set to "BEMC"
   * BEMC-PM, group set to "BEMC"
   * BTOF-Sensor, group set to "BTOF"
   * BTOF-Readout, group set to "BTOF"
+  * DAQ-Servers, group set to "DAQ"
 
-* Locations (a room must sit in a building, so each of these rooms gets a "Main Building"):
+* Locations (a room must sit in a building, so each of these rooms gets a "Main Building"). Room is a legitimate
+location but the building is not. There are further levels of granularity like "cabinet" and in it, a "shelf", the
+latter two being optinal. Inventory items cannot have blank fields for location.
   * CUA, Main Building, Storage Room
   * UIC, Main Building, Test Lab
-  * BNL, Bldg.510A
+  * BNL, Bldg.510A, Test Lab
+  * BNL, Bldg.510A, Storage Room
+  * BNL, Bldg.510A, Server Room
 
 * Components:
  * PbWO4 Crystal (to be used in the BEMC-CRYSTAL technical system)
  * Hamamatsu S14160-3010PS (to be used in the BEMC-PM)
  * AC-LGAD Sensor (to be used in BTOF-Sensor technical system)
  * FCFDv2 Readout (to be used in the BTOF-Readout technical system)
+ * DAQ server
 
  Create between 2 and 5 component instances for each component.
  

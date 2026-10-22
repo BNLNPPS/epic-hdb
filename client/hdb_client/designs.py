@@ -83,6 +83,20 @@ def _git_relative_path(path) -> str:
         return str(path)
 
 
+
+def _reject_template_owner_user(docs, path):
+    """Templates are owned by a group only; a YAML `owner_user` is an error
+    (fail loudly rather than silently dropping it -- see DesignTemplate)."""
+    for doc in docs:
+        tpl = doc.get("template", {}) if isinstance(doc, dict) else {}
+        if "owner_user" in tpl:
+            raise ValueError(
+                f"{path}: template {tpl.get('name')!r} sets 'owner_user', which is not "
+                f"supported -- design templates belong to a group (owner_group) only. "
+                f"Remove the line; whoever instantiates the template owns the resulting design."
+            )
+
+
 class DesignClient:
     def __init__(self, user=None):
         self.user = user
@@ -169,7 +183,7 @@ class DesignClient:
     # read-time defense-in-depth on top of that, not the primary defense.
 
     def all_templates(self):
-        return _m().DesignTemplate.objects.select_related("owner_group", "owner_user")
+        return _m().DesignTemplate.objects.select_related("owner_group")
 
     def get_template(self, name: str | None = None, pk: str | None = None):
         qs = _m().DesignTemplate.objects
@@ -266,7 +280,6 @@ class DesignClient:
         project: str = "ePIC",
         description: str = "",
         owner_group_name: str | None = None,
-        owner_username: str | None = None,
         product_component=None,
         elements=(),
         source_path: str | None = None,
@@ -279,9 +292,10 @@ class DesignClient:
         clobbered; only missing ones are created). This is an
         administrative/curator operation akin to `seed_hdb` (it loads
         reference/catalog data), not a per-request scoped write like
-        `InventoryClient.create()` -- `owner_group_name`/`owner_username`
-        are recorded on the template if given, but there is no requirement
-        that `self.user` belong to that group.
+        `InventoryClient.create()` -- `owner_group_name` is recorded on the
+        template if given, but there is no requirement that `self.user`
+        belong to that group. Templates have no individual owner: whoever
+        later instantiates one becomes the owner_user of the Design.
 
         `product_component` (optional): str | dict, same shape as an
         element's "component" (see _resolve_component()) -- the catalog
@@ -343,11 +357,6 @@ class DesignClient:
             from django.contrib.auth.models import Group
             owner_group, _ = Group.objects.get_or_create(name=owner_group_name)
 
-        owner_user = None
-        if owner_username:
-            from django.contrib.auth.models import User
-            owner_user = User.objects.get(username=owner_username)
-
         product = None
         if product_component is not None:
             product, _ = self._resolve_component(product_component, default_project=project)
@@ -356,7 +365,6 @@ class DesignClient:
             "project": project,
             "description": description,
             "owner_group": owner_group,
-            "owner_user": owner_user,
             "product_component": product,
         }
         if source_path is not None:
@@ -480,8 +488,8 @@ class DesignClient:
               name: str
               project: str                 # default "ePIC"
               description: str
-              owner_group: str             # optional Group name
-              owner_user: str              # optional Django username
+              owner_group: str             # optional Group name (templates have no
+                                           # individual owner -- "owner_user" is rejected)
               product_component: str|dict  # optional -- see create_template()
             elements:
               - element_name: str
@@ -528,6 +536,7 @@ class DesignClient:
             data = yaml.safe_load(fh)
 
         docs = data["templates"] if isinstance(data, dict) and "templates" in data else [data]
+        _reject_template_owner_user(docs, path)
 
         # Provenance: one file content hash / git commit shared by every
         # template this file defines (a file can hold several "templates:"
@@ -570,7 +579,6 @@ class DesignClient:
                     project=tpl.get("project", "ePIC"),
                     description=tpl.get("description", ""),
                     owner_group_name=tpl.get("owner_group"),
-                    owner_username=tpl.get("owner_user"),
                     product_component=tpl.get("product_component"),
                     elements=doc.get("elements", []),
                     source_path=None if has_drift else file_source_path,
@@ -639,6 +647,7 @@ class DesignClient:
         with open(path) as fh:
             data = yaml.safe_load(fh)
         docs = data["templates"] if isinstance(data, dict) and "templates" in data else [data]
+        _reject_template_owner_user(docs, path)
 
         file_sha256 = _file_sha256(path)
 
@@ -657,7 +666,7 @@ class DesignClient:
             tpl = doc["template"]
             name = tpl["name"]
             template = m.DesignTemplate.objects.filter(name=name).select_related(
-                "owner_group", "owner_user", "product_component",
+                "owner_group", "product_component",
             ).prefetch_related("elements__component", "elements__child_template").first()
 
             report = {
@@ -682,7 +691,6 @@ class DesignClient:
                 "project": tpl.get("project", "ePIC"),
                 "description": tpl.get("description", ""),
                 "owner_group": tpl.get("owner_group"),
-                "owner_user": tpl.get("owner_user"),
                 "product_component": (
                     _spec_name(tpl["product_component"]) if tpl.get("product_component") else None
                 ),
@@ -691,7 +699,6 @@ class DesignClient:
                 "project": template.project,
                 "description": template.description,
                 "owner_group": template.owner_group.name if template.owner_group else None,
-                "owner_user": template.owner_user.username if template.owner_user else None,
                 "product_component": template.product_component.name if template.product_component else None,
             }
             for field, yaml_val in expected.items():

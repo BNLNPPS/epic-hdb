@@ -21,7 +21,6 @@ template:
   name: "BEMC tower"
   project: "ePIC"
   owner_group: BEMC
-  owner_user: crafts
   description: >
     One BEMC tower: a PbWO4 crystal read out by four SiPMs.
 elements:

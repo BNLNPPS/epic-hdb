@@ -2252,7 +2252,6 @@ def template_list(request):
                 name=name,
                 description=description,
                 owner_group_id=group_id,
-                owner_user=request.user,
                 created_by=request.user,
             )
             return redirect('template-detail', pk=template.pk)
@@ -2260,7 +2259,7 @@ def template_list(request):
     q     = request.GET.get('q', '')
     group = request.GET.get('group', '')
     status = request.GET.get('status', '')
-    qs = DesignTemplate.objects.select_related('owner_group', 'owner_user').annotate(
+    qs = DesignTemplate.objects.select_related('owner_group').annotate(
         placeholder_count=Count('elements', distinct=True),
         design_count=Count('designs', distinct=True),
     ).order_by('name')
@@ -2331,7 +2330,7 @@ def template_detail(request, pk):
         return HttpResponseNotAllowed(['GET'])
 
     template = get_object_or_404(
-        DesignTemplate.objects.select_related('owner_group', 'owner_user')
+        DesignTemplate.objects.select_related('owner_group')
                               .prefetch_related('elements__component', 'elements__child_template'),
         pk=pk,
     )

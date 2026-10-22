@@ -1106,3 +1106,40 @@ class UserDeletionProtected(Base):
         ComponentInstance.objects.filter(pk=i.pk).update(owner_user=self.user)
         victim.delete()
         self.assertFalse(User.objects.filter(pk=victim.pk).exists())
+
+
+class TemplatesHaveNoIndividualOwner(Base):
+    """Templates belong to a group only; the instantiating user owns the Design."""
+
+    def test_model_has_no_owner_user(self):
+        from django.core.exceptions import FieldDoesNotExist
+        with self.assertRaises(FieldDoesNotExist):
+            DesignTemplate._meta.get_field("owner_user")
+        DesignTemplate._meta.get_field("owner_group")  # still there
+
+    def test_user_with_only_a_template_is_deletable(self):
+        u = User.objects.create_user("tplmaker", password="x")
+        DesignTemplate.objects.create(name="TT", owner_group=self.group, created_by=u)
+        u.delete()  # created_by is audit only, not ownership
+
+    def test_instantiating_makes_requester_the_design_owner(self):
+        tpl = DesignTemplate.objects.create(name="T2", owner_group=self.group)
+        DesignTemplateElement.objects.create(template=tpl, element_name="e", component=self.comp)
+        self.client.force_login(self.user)
+        self.client.post(reverse("design-list"), {"template": tpl.pk, "name": "D2"})
+        d = Design.objects.get(name="D2")
+        self.assertEqual((d.owner_user, d.owner_group), (self.user, self.group))
+
+    def test_yaml_owner_user_is_rejected(self):
+        import sys, tempfile, os
+        from django.conf import settings
+        sys.path.insert(0, str(settings.BASE_DIR / "client"))
+        from hdb_client import HDBClient
+        with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as f:
+            f.write("template:\n  name: X\n  owner_group: G\n  owner_user: u\nelements: []\n")
+        try:
+            with self.assertRaisesRegex(ValueError, "owner_user"):
+                HDBClient(user=self.user).designs.load_templates_from_yaml(f.name)
+        finally:
+            os.unlink(f.name)
+        self.assertFalse(DesignTemplate.objects.filter(name="X").exists())
