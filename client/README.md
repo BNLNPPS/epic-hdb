@@ -532,9 +532,13 @@ Half-Stave Assemblies  x144  -> [template] BTOF Half-Stave
 
 `load-template FILE` resolves `FILE` against the current directory first,
 then falls back to `<project root>/data/FILE` — so both a bare filename and
-an explicit path work, run from anywhere. `--user` is optional here (unlike
-`create-instance`) since this is a curator operation, not a per-request
-write.
+an explicit path work, run from anywhere. **`--user USERNAME` is required**:
+it is recorded as the template's `created_by` (when the row is first created)
+and `modified_by` (on every load), so the audit trail is never blank. It must
+be an existing Django user; no password is checked, since this is a curator
+operation like `seed_hdb`, not a per-request write. (The Python method
+`client.designs.load_templates_from_yaml()` still accepts `HDBClient()` with no
+user, leaving those fields empty — the requirement is a CLI rule.)
 
 #### Deleting a template
 
@@ -630,7 +634,7 @@ python client/hdb.py [--settings MODULE] [--root DIR] [--user USERNAME] [--yaml]
 |---|---|
 | `--settings` | Django settings module (default `hdb_project.settings`) |
 | `--root` | Project root directory (default: parent of `client/`) |
-| `--user` | Django username to act as. Only needed for `create-instance` — every other command works fine unauthenticated. |
+| `--user` | Django username to act as. Required for `create-instance`, `load-template` and `delete-template` (superuser); optional pre-fill for `nuke-database`, which always asks for a password. Every other command works fine unauthenticated. |
 | `--yaml` | Force YAML output for commands that default to a plain table |
 
 Set up a `bin/hdb` wrapper (not included in the repo) if you want to just
@@ -651,7 +655,6 @@ Abbr  Name                            City            Country
 ----  ------------------------------  --------------  -------
 BNL   Brookhaven National Laboratory  Upton, NY       USA
 CUA   Catholic University of America  Washington, DC  USA
-UH    University of Hawaii            Honolulu, HI    USA
 UIC   University of Illinois Chicago  Chicago         USA
 ```
 
@@ -829,6 +832,67 @@ And omitting `--user` entirely fails with:
 ```
 Error creating instance: Authentication required to create inventory records.
 ```
+
+### `nuke-database` — reset to a completely empty database (superusers only)
+
+Wipes **every row in every table** — all components, instances, designs,
+templates, logs, property values, *and all user accounts and groups, yours
+included* — and resets the ID sequences. The schema and migrations are kept,
+so no `migrate` is needed afterwards. Intended for starting over in
+development (then `python manage.py seed_hdb`), and available on production
+with extra care.
+
+```bash
+python client/hdb.py nuke-database
+python client/hdb.py --user maxim nuke-database      # pre-fills the username only
+python client/hdb.py nuke-database --no-backup       # skip the SQLite file copy
+```
+
+Safeguards, all enforced by the command itself (there is no `--yes` flag):
+
+1. **Interactive terminal only.** It refuses to run when stdin/stdout is
+   piped or redirected, so it can't be scripted by accident.
+2. **Authentication.** It prompts for a Django username and password and
+   checks them with Django's `authenticate()`. `--user` merely pre-fills the
+   username and is never trusted on its own. The account must be an active
+   **superuser** — a valid non-superuser is refused immediately; bad
+   credentials get 3 attempts.
+3. **Typed confirmation.** It prints the database about to be wiped and the
+   row count of every non-empty table, then asks you to type an exact phrase
+   naming the database — `NUKE db.sqlite3` on SQLite, or
+   `NUKE <dbname>@<host>` on PostgreSQL — and finally `yes, erase it`. Anything
+   else aborts with nothing changed.
+4. **Backup (SQLite).** Before wiping, the database file is copied to
+   `db.sqlite3.bak-prenuke-<timestamp>` next to it (git-ignored by the
+   `db.sqlite3.bak-*` pattern). **PostgreSQL gets no automatic backup** —
+   take a `pg_dump` first.
+
+```
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  DESTRUCTIVE OPERATION: COMPLETE DATABASE RESET
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  Database : /path/to/db.sqlite3  (sqlite)
+  Will be permanently destroyed:
+           29  hdb.ComponentInstance
+            ...
+  Everything above -- including ALL user accounts, yours too -- will be
+  gone. Uploaded media files on disk are NOT touched. There is no undo.
+...
+To proceed, type the following phrase exactly (anything else aborts):
+
+    NUKE db.sqlite3
+
+> 
+```
+
+**Afterwards nobody can log in**, because the user accounts are gone too.
+Re-populate with `python manage.py seed_hdb` (dev: recreates `admin`/`admin`
+and the other seed users) or `python manage.py createsuperuser` (production).
+Uploaded media files (`MEDIA_ROOT`) are left on disk. To undo a SQLite nuke,
+stop the server and copy the `.bak-prenuke-*` file back over `db.sqlite3`.
+
+This operation exists only in the CLI (`hdb_client/maintenance.py`); it is
+deliberately not part of `HDBClient` and not exposed through the MCP server.
 
 ---
 

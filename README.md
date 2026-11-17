@@ -7,14 +7,17 @@ in ePIC and EIC project.
 
 Salient features:
 
-* Inventory items are created based on the descirption in the _Component Catalog_
+* Inventory items are created based on the description in the _Component Catalog_
 * Location and custody of each items is managed
 * Locations are described as a hierarchy of the following
-  1. Insitution
+  1. Institution
   2. Building
   3. Room
   4. Cabinet
   5. Shelf
+
+  Inventory items must always have a location, and it must be a room or something
+  inside one (cabinet, shelf) — a building is only the parent a room sits in.
 * Roles: all items are categorized based on _Groups_ and _Systems_, the latter providing a more detailed level of granularity
 * Users can be members of multiple groups. Any operations on the catalog and inventory items owned by a Group are limited to members of that group.
 * The Database supports complex entities (assemblies), termed _Designs_.
@@ -40,6 +43,8 @@ Salient features:
 8. [Seed Data](#seed-data)
 9. [Schema Diagram](#schema-diagram)
 10. [Design Decisions](#design-decisions)
+11. [Note for testers/developers](#note-for-testersdevelopers) — resetting the database
+12. [Deployment](#shell-environment-for-deployment) — environment and updating the running code
 
 ---
 
@@ -75,8 +80,8 @@ epic-hdb/
 │   ├── views_web.py             # Server-rendered web UI views
 │   ├── urls_web.py              # Web UI URL routes
 │   ├── views.py / serializers.py  # Optional REST API (only if djangorestframework is installed)
-│   ├── migrations/
-│   │   └── 0001_initial.py
+│   ├── migrations/              # tracked in git; production is upgraded with these
+│   │   └── 0001_initial.py ... 0010_*.py
 │   ├── management/commands/
 │   │   └── seed_hdb.py          # Sample data loader
 │   └── templates/cdb/           # Web UI templates — NOTE: this directory is still
@@ -85,7 +90,7 @@ epic-hdb/
 │                                 # template subdirectory's name is a known, pending
 │                                 # cleanup, not a functional issue.
 ├── client/                      # hdb_client library, CLI, and MCP server — see client/README.md
-│   ├── hdb.py                   # Command-line interface
+│   ├── hdb.py                   # Command-line interface (incl. nuke-database)
 │   ├── mcp_server.py            # MCP server (for AI assistants / MCP clients)
 │   ├── smoke_test.py            # End-to-end test for the MCP server
 │   ├── requirements.txt
@@ -98,10 +103,14 @@ epic-hdb/
 │       ├── locations.py         # LocationClient
 │       ├── systems.py           # SystemClient
 │       ├── access.py            # Ownership/permission checks shared by all writes
+│       ├── maintenance.py       # Superuser-only database reset (CLI only, not in MCP)
 │       └── serializers.py       # Plain-dict output shaping (no DRF dependency)
-├── data/                        # Sample input files for the client (YAML)
+├── data/                        # YAML input files for the client (loaded by seed_hdb too)
 │   ├── new_crystal.yaml
-│   └── btof_stave_templates.yaml
+│   ├── bemc_tower_template.yaml
+│   ├── btof_split/              # BTOF Stave/Half-Stave/Stavelet, one template per file
+│   └── btof_stave_templates.yaml   # DEPRECATED, superseded by btof_split/
+├── deploy/                      # Versioned deployment files (env.example, httpd, systemd)
 └── assets/
     ├── docs/The_Legacy_Component_Database_User_Guide.pdf   # The original ANL inspiration
     └── images/                  # Reference photos used by seed_hdb.py
@@ -119,7 +128,7 @@ web UI's inventory QR-code page needs it — everything else only needs Django).
 > (`CheckConstraint`'s `check=` argument was removed in favor of
 > `condition=`); everything else carried over unchanged. To set up a
 > matching Python 3.12 environment via `uv`, see `setup_py312_env.sh` and
-> `requirements-py312.txt` in the project root.
+> `requirements-py312.txt` in `attic/`.
 
 ```bash
 pip install django "qrcode[pil]"
@@ -228,8 +237,8 @@ informal `<GROUP>-<ROLE>` convention (`BEMC-CRYSTAL`/`BEMC-PM` → group
 `BEMC`; `BTOF-Sensor`/`BTOF-Readout` → group `BTOF`; `PFRICH-HRPPD` → group
 `PFRICH`) purely for human readability. The actual link between the two
 models is only the one nullable FK, `TechnicalSystem.group`, set once at
-creation — see [Domain 1](#domain-1--component-catalog) above and the
-Django-admin note below for how that field is (and isn't) kept in sync.
+creation — see the Django-admin note below for how that field is (and isn't)
+kept in sync.
 
 **`Source`** — vendor or manufacturer. The `ComponentSource` through-table
 adds `part_number`, `cost`, and `role` (`vendor` / `manufacturer` / `both`)
@@ -506,7 +515,8 @@ of the resulting `Design`.
 | `modified_by` / `modified_on` | Modification audit trail |
 
 **`Group`** — a named team or subsystem (this repo's seed data uses `BEMC`,
-`BTOF`, and `PFRICH`). A user may write to a row if they're its
+`BTOF`, `PFRICH`, `DAQ`, and `ADMIN` — the last is only a label; superuser
+powers come from the `is_superuser` flag, never from group membership). A user may write to a row if they're its
 `owner_user`, they're Django staff/superuser, or they're a member of
 `owner_group` *and* `group_writeable` is `True` — see
 `client/hdb_client/access.py` for the exact rule, shared by every write
@@ -592,7 +602,7 @@ client.designs.template_bom("BTOF Stave")   # see Domain 3 above for what this r
 
 **For the complete method-by-method reference, the CLI command list
 (including `load-template`/`bom-template`/`delete-template` for working
-with Design Templates), the YAML formats, and MCP server setup/auth/tools —
+with Design Templates, and the superuser-only `nuke-database` reset), the YAML formats, and MCP server setup/auth/tools —
 see [`client/README.md`](client/README.md).** That document is the
 authoritative usage reference for all three layers; this section is
 intentionally just an orientation, kept short so it can't drift out of sync
@@ -608,16 +618,16 @@ approximate):
 
 | Object | Count | Examples |
 |--------|-------|---------|
-| Institutions | 4 | BNL, CUA, UIC, UH (University of Hawaii) |
-| Locations | 5 | Main Building (CUA, UIC) with Storage Room (CUA) and Test Lab (UIC), Bldg.510A (BNL) |
-| Groups | 3 | BEMC, BTOF, PFRICH |
-| Users | 8 | `admin`, `maxim` (superusers); `crafts` (BEMC), `gnigmat` (BTOF), `ottjenni` (BTOF), `ullrich` (BEMC+BTOF), `bpage` (PFRICH), `ayk` (PFRICH) |
-| Technical Systems | 5 | BEMC-CRYSTAL, BEMC-PM, BTOF-Sensor, BTOF-Readout, PFRICH-HRPPD |
-| Components | 4 | PbWO4 Crystal, Hamamatsu S14160-3010PS, AC-LGAD Sensor, FCFDv2 Readout |
-| Instances | 26 | 3 crystals, 16 SiPMs, 2 AC-LGAD sensors, 5 FCFDv2 readout ASICs |
-| Design Templates | 1 | BEMC tower (blueprint: 1 crystal + 4 SiPMs) |
-| Designs | 1 | BEMC tower (instantiated from its own template) |
-| Property Types | 7 | Weight, Datasheet, Timing Constant, Length, Width, Height, Image |
+| Institutions | 3 | BNL, CUA, UIC |
+| Locations | 8 | 3 buildings (Main Building at CUA and UIC, Bldg.510A at BNL) and 5 rooms: CUA Storage Room, UIC Test Lab, BNL Test Lab / Storage Room / Server Room |
+| Groups | 5 | BEMC, BTOF, PFRICH, DAQ, ADMIN |
+| Users | 6 | `admin`, `maxim` (superusers, group ADMIN); `crafts` (BEMC), `gnigmat` (BTOF), `arkhipkin` (DAQ), `ullrich` (BEMC+BTOF) |
+| Technical Systems | 6 | BEMC-CRYSTAL, BEMC-PM, BTOF-Sensor, BTOF-Readout, DAQ-Servers, plus BTOF-Mechanical (created by the BTOF template files) |
+| Components | 12 | PbWO4 Crystal, Hamamatsu S14160-3010PS, AC-LGAD Sensor, FCFDv2 Readout, DAQ server, plus 7 BTOF mechanical/assembly parts created by the BTOF template files (all owned by group BTOF / user `gnigmat`) |
+| Instances | 17 | 3 crystals, 4 SiPMs, 2 AC-LGAD sensors, 5 FCFDv2 readout ASICs, 3 DAQ servers — all in rooms |
+| Design Templates | 4 | BEMC tower; BTOF Stave, Half-Stave, Stavelet (group-owned, no individual owner) |
+| Designs | 1 | BEMC tower (instantiated from its own template, owned by `crafts`) |
+| Property Types | 6 | Weight, Timing Constant, Length, Width, Height, Image |
 | Sources | 0 | — |
 
 Every account's initial password matches its username (e.g. `crafts`/`crafts`),
@@ -625,12 +635,12 @@ set only the first time each account is created. The command is
 **idempotent** — safe to run repeatedly, never duplicates or clobbers
 existing records (`get_or_create()` throughout).
 
-Separately, `data/btof_stave_templates.yaml` provides a much larger,
-multi-level Design Template set (the ePIC BTOF Stave → Half-Stave →
-Stavelet hierarchy) — it's **not** loaded by `seed_hdb`, but by
-`client/hdb.py load-template`. See
-[Python Client, CLI, and MCP Server](#python-client-cli-and-mcp-server)
-above and `client/README.md` for how.
+The design templates come from the tracked YAML files under `data/`
+(`bemc_tower_template.yaml` and `btof_split/*.yaml`), loaded through
+`hdb_client` exactly as `client/hdb.py --user <name> load-template` would —
+the BEMC one as `crafts`, the BTOF ones as `gnigmat`, which become their
+`created_by`. See [Python Client, CLI, and MCP Server](#python-client-cli-and-mcp-server)
+above and `client/README.md`.
 
 ---
 
@@ -715,10 +725,17 @@ explicitly documented as such in `client/README.md`.
 
 ## Note for testers/developers
 
-To completely reset the **local SQLite development** database, use these
-commands. Do **not** delete `hdb/migrations/` -- the migrations are tracked
-in git and are what production (Postgres) is upgraded with; regenerating
-them locally produces a history that no longer matches the deployed one.
+To completely reset the **local SQLite development** database, either use the
+built-in command (superuser password and typed confirmation required, makes a
+timestamped backup of `db.sqlite3` first — see `client/README.md`):
+```bash
+python client/hdb.py nuke-database
+python manage.py seed_hdb          # nobody can log in until you re-seed (or createsuperuser)
+```
+or the manual route. Do **not** delete `hdb/migrations/` -- the migrations are
+tracked in git and are what production (Postgres) is upgraded with;
+regenerating them locally produces a history that no longer matches the
+deployed one.
 ```bash
 # from your project root (where manage.py lives)
 rm -f db.sqlite3
@@ -734,8 +751,14 @@ refuses to run against anything but SQLite unless you pass
 
 ## Shell environment for deployment
 
+The real file is `/etc/hdb/env` on the host (root-readable only, never
+committed); `deploy/env.example` documents the keys with placeholders.
+
 ```bash
+DJANGO_DB_TYPE=postgres      # REQUIRED on the host: unset silently means sqlite!
 DJANGO_SECRET_KEY=some-long-random-string
+DJANGO_DEBUG=0
+DJANGO_ALLOWED_HOSTS=epic-hwdb.sdcc.bnl.gov,localhost,127.0.0.1
 DJANGO_DB_NAME=hwdb
 DJANGO_DB_USER=hwdb_user
 DJANGO_DB_PASSWORD=XYZ
@@ -751,8 +774,16 @@ source ~/.virtualenvs/hdb/bin/activate
 set -a; source /etc/hdb/env; set +a
 ```
 
-## Updating the running code on the deployment machine:
+## Updating the running code on the deployment machine
+
+Full procedure and gotchas are in `CLAUDE.md` ("Deployment"). In short, with the
+environment above sourced in that same shell:
 
 ```bash
+pg_dump ...                        # back up the database before any migration
+git pull
+pip3 install -r requirements.txt
+python manage.py migrate
+python manage.py collectstatic --noinput
 sudo systemctl restart hdb-gunicorn
 ```

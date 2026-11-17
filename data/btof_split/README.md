@@ -10,7 +10,8 @@ Each references the level below it by name (`child_template: "BTOF Half-
 Stave"`, `child_template: "BTOF Stavelet"`) rather than by load order, so
 any of the three can be uploaded in any sequence -- that's exactly the
 async/order-independent loading this split exists to exercise. Suggested
-sequences to try, each with `hdb load-template`:
+sequences to try, each with `hdb --user gnigmat load-template` (`--user` is
+required; it is recorded as the template's `created_by`/`modified_by`):
 
 - **Leaf-first** (`btof_stavelet.yaml`, then `btof_half_stave.yaml`, then
   `btof_stave.yaml`) -- the traditional order; every reference resolves

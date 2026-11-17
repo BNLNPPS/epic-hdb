@@ -5,6 +5,7 @@ from contextlib import redirect_stdout
 
 from django.contrib.auth.models import Group, User
 from django.core.management import call_command
+from django.core.exceptions import ValidationError
 from django.core.management.base import CommandError
 from django.db import IntegrityError
 from django.db.models import ProtectedError
@@ -1143,3 +1144,28 @@ class TemplatesHaveNoIndividualOwner(Base):
         finally:
             os.unlink(f.name)
         self.assertFalse(DesignTemplate.objects.filter(name="X").exists())
+
+
+class InstanceRequiresLocation(Base):
+    def test_create_without_location_refused(self):
+        with self.assertRaises(ValidationError):
+            ComponentInstance.objects.create(component=self.comp, tag="nl")
+        self.assertFalse(ComponentInstance.objects.filter(tag="nl").exists())
+
+    def test_clearing_location_refused(self):
+        i = self.instance()
+        i.location = None
+        with self.assertRaises(ValidationError):
+            i.save()
+        i.refresh_from_db()
+        self.assertEqual(i.location_id, self.l1.pk)
+
+    def test_full_clean_reports_missing_location(self):
+        i = ComponentInstance(component=self.comp, tag="nl")
+        with self.assertRaises(ValidationError):
+            i.full_clean()
+
+    def test_database_rejects_null_location(self):
+        i = self.instance()
+        with self.assertRaises(IntegrityError):  # bypasses save(), e.g. a bulk update
+            ComponentInstance.objects.filter(pk=i.pk).update(location=None)

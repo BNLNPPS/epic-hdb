@@ -20,7 +20,7 @@ Commands
   bom            <DESIGN_NAME>  Bill of Materials (YAML)
   find           <TYPE> <PAT>   List items matching a wildcard pattern
   create-instance               Create a new ComponentInstance
-  load-template  <FILE>         Load DesignTemplate(s) from a YAML file
+  load-template  <FILE>         Load DesignTemplate(s) from a YAML file (requires --user)
   verify-template <FILE>        Compare a YAML file against the live database, no writes
   bom-template   <NAME>         Recursive parts explosion for a template
   subsystem-hash <NAME>         Composite fingerprint over a template and everything beneath it
@@ -34,7 +34,7 @@ Options
   --root      Project root directory  [default: parent of bin/]
   --yaml      Force YAML output for all commands
   --user      Django username to act as for write operations
-              (required for create-instance; the created record is always
+              (required for create-instance and load-template; the created record is always
               owned by this user -- there is no way to set ownership to
               someone else, by design, see hdb_client/access.py. Also
               required for delete-template, where the user must be a
@@ -247,12 +247,20 @@ def cmd_load_template(client, args):
     automatically the moment a template with that name is loaded, from
     this file or any other. See client/README.md for the YAML format.
 
+    Requires --user (an existing Django username): it is recorded as the
+    template's created_by (first load) and modified_by (every load), so
+    the audit trail is never blank. No password is checked -- this is a
+    curator command, like seed_hdb.
+
     Examples
     --------
-      bin/hdb load-template btof_stave_templates.yaml
-      bin/hdb load-template data/btof_stave_templates.yaml
-      bin/hdb --user crafts load-template btof_stave_templates.yaml
+      bin/hdb --user crafts load-template bemc_tower_template.yaml
+      bin/hdb --user gnigmat load-template btof_split/btof_stavelet.yaml
     """
+    if client.user is None:
+        print("Error: load-template requires --user USERNAME (recorded as the "
+              "template's created_by/modified_by).", file=sys.stderr)
+        sys.exit(1)
     path = _data_path(args, args.file)
     try:
         outcome = client.designs.load_templates_from_yaml(path)
@@ -856,7 +864,7 @@ def build_parser():
                          "name exists in more than one project")
 
     sp = sub.add_parser("load-template",
-                        help="Load DesignTemplate(s) from a YAML file (data/ by default)")
+                        help="Load DesignTemplate(s) from a YAML file (data/ by default); requires --user")
     sp.add_argument("file", metavar="FILE",
                     help="YAML file, resolved against cwd then <project root>/data/")
 

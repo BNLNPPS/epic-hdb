@@ -89,10 +89,17 @@ the host and fill in the real values.
   untangle. `/etc/hdb/env` is intentionally root-only-readable (it holds the
   DB password), so a plain `eicmax` shell can't just `source` it — either
   wrap the command in `sudo bash -c '...'` (see the smoke-check example
-  below), or set up a dedicated group for it. **[TODO]**: add
-  `export DJANGO_DB_TYPE=postgres` to `~/.virtualenvs/hdb/bin/activate` so a
-  bare shell fails loudly (`ImproperlyConfigured`, missing credentials)
-  instead of silently succeeding against sqlite.
+  below), or set up a dedicated group for it. **[done]**
+  `settings.py` now refuses to start (`ImproperlyConfigured`) when the
+  directory `/etc/hdb` exists but `DJANGO_DB_TYPE` is unset, i.e. a bare
+  shell on the production host; dev machines have no `/etc/hdb` and keep
+  the sqlite default. gunicorn and the `sudo bash -c '...source
+  /etc/hdb/env...'` wrapper set the variable, so they are unaffected.
+  Note the running web app was never affected by the gotcha -- the systemd
+  unit loads `/etc/hdb/env` via `EnvironmentFile=` -- only interactive
+  shells (`manage.py`, `client/hdb.py`) were. Also: keep exactly one
+  `DJANGO_SECRET_KEY` line in `/etc/hdb/env` (a duplicate silently uses
+  the last one).
 * **Policy: the real `/etc/hdb/env` is never committed to this repo,**
   full stop — it holds `DJANGO_SECRET_KEY`, `DJANGO_DB_PASSWORD`, and
   will likely accumulate more secrets over time, and it's too easy to

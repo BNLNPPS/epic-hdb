@@ -83,9 +83,9 @@ each level can be uploaded independently — see
 upload orders. Used with `load-template` instead of `create-instance`:
 
 ```bash
-python client/hdb.py --user crafts load-template btof_split/btof_stavelet.yaml
-python client/hdb.py --user crafts load-template btof_split/btof_half_stave.yaml
-python client/hdb.py --user crafts load-template btof_split/btof_stave.yaml
+python client/hdb.py --user gnigmat load-template btof_split/btof_stavelet.yaml
+python client/hdb.py --user gnigmat load-template btof_split/btof_half_stave.yaml
+python client/hdb.py --user gnigmat load-template btof_split/btof_stave.yaml
 ```
 
 This is a curator/administrative operation, not a per-request scoped

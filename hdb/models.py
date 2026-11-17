@@ -447,15 +447,12 @@ class ComponentInstance(OwnedModel):
     serial_number    = models.CharField(max_length=128, blank=True)
     component        = models.ForeignKey(Component,       on_delete=models.PROTECT,  related_name="instances")
     technical_system = models.ForeignKey(TechnicalSystem, null=True, blank=True, on_delete=models.SET_NULL, related_name="component_instances")
+    # Required: a physical item always has a location (even "at the
+    # manufacturer" or "in transit" is one) -- NOT NULL in the database,
+    # enforced for every write path by validate_location() below.
     # on_delete=PROTECT (not SET_NULL): deleting a Location that still has
-    # instances stored there would otherwise silently blank out their
-    # location for everyone who owns one, with the person deleting the
-    # Location having no obvious reason to think about inventory at all.
-    # null=True/blank=True stay -- that's a separate question (whether a
-    # user should ever be able to explicitly clear an instance's own
-    # location) from what happens to instances when the Location itself
-    # is deleted out from under them.
-    location         = models.ForeignKey(Location,        null=True, blank=True, on_delete=models.PROTECT, related_name="instances")
+    # instances stored there is blocked instead of silently orphaning them.
+    location         = models.ForeignKey(Location,        on_delete=models.PROTECT, related_name="instances")
     description      = models.TextField(blank=True)
 
     def save(self, *args, **kwargs):
@@ -464,20 +461,41 @@ class ComponentInstance(OwnedModel):
             self.id = str(uuid.uuid4())
         if self.technical_system_id is None and self.component_id:
             self.technical_system = self.component.technical_system
-        if self.location_id:
-            # Checked when an item is created or moved -- not on every save,
-            # so legacy rows already sitting in a building can still have
-            # unrelated fields edited until someone moves them.
-            old = None
-            if not self._state.adding:
-                old = (type(self).objects.filter(pk=self.pk)
-                       .values_list("location_id", flat=True).first())
-            if self._state.adding or old != self.location_id:
-                if not self.location.can_hold_items():
-                    raise ValidationError(
-                        f"Items can only be stored in a room (or a cabinet or shelf in one); "
-                        f"{self.location.name!r} is a {self.location.location_type}.")
+        self.validate_location()
         super().save(*args, **kwargs)
+
+    def validate_location(self):
+        """Enforce the location rules for an inventory item.
+
+        - A physical item always has a location, so it can't be saved
+          without one (the column is NOT NULL as well; this gives a proper
+          ValidationError instead of a database IntegrityError).
+        - The location must be suitable -- a room, or a cabinet/shelf in
+          one -- checked when the item is created or moved, not on every
+          save, so a legacy row already sitting in a building can still
+          have unrelated fields edited until someone moves it.
+
+        Called from save() -- so every write path (web, admin, hdb_client,
+        scripts) is covered -- and from clean(), so the admin form reports
+        the problem instead of failing with an error page. Raises
+        django.core.exceptions.ValidationError."""
+        if self.location_id is None:
+            raise ValidationError(
+                "An inventory item always needs a location: choose a room "
+                "(or a cabinet or shelf in one).")
+        old = None
+        if not self._state.adding:
+            old = (type(self).objects.filter(pk=self.pk)
+                   .values_list("location_id", flat=True).first())
+        if self._state.adding or old != self.location_id:
+            if not self.location.can_hold_items():
+                raise ValidationError(
+                    f"Items can only be stored in a room (or a cabinet or shelf in one); "
+                    f"{self.location.name!r} is a {self.location.location_type}.")
+
+    def clean(self):
+        super().clean()
+        self.validate_location()
 
     def effective_properties(self):
         """Properties as they should be displayed/used for this instance:

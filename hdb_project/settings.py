@@ -134,6 +134,24 @@ WSGI_APPLICATION = 'hdb_project.wsgi.application'
 # unset variable behaves like the previous hardcoded default instead of
 # silently trying to reach a Postgres server.
 
+# Guard against the "bare shell on the production host" failure: /etc/hdb is
+# the production env directory (root-only files, so only the directory's
+# existence is checked -- an unprivileged user can stat it but not read the
+# file). If it exists and DJANGO_DB_TYPE is NOT set, this process was started
+# without /etc/hdb/env sourced, and silently falling back to sqlite would
+# point manage.py / hdb.py at a throwaway database. Fail loudly instead.
+# gunicorn (EnvironmentFile=/etc/hdb/env) and the `sudo bash -c 'set -a;
+# source /etc/hdb/env; ...'` wrapper both set it, so they are unaffected;
+# dev machines have no /etc/hdb, so they keep the sqlite default.
+_PROD_ENV_DIR = '/etc/hdb'
+if 'DJANGO_DB_TYPE' not in os.environ and os.path.isdir(_PROD_ENV_DIR):
+    raise ImproperlyConfigured(
+        f"{_PROD_ENV_DIR} exists, so this looks like the production host, but "
+        "DJANGO_DB_TYPE is not set: /etc/hdb/env was not sourced in this shell. "
+        "Refusing to fall back to sqlite. Run the command via "
+        "`sudo bash -c 'set -a; source /etc/hdb/env; set +a; ...'` (see CLAUDE.md)."
+    )
+
 DJANGO_DB_TYPE = os.environ.get('DJANGO_DB_TYPE', 'sqlite').lower()
 
 if DJANGO_DB_TYPE == 'sqlite':
